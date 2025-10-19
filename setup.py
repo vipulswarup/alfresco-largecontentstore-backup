@@ -52,21 +52,23 @@ def ask_yes_no(question: str, default: bool = True) -> bool:
         print_warning("Please answer 'y' or 'n'")
 
 def run_command(cmd: list, capture_output: bool = False, check: bool = True) -> Optional[subprocess.CompletedProcess]:
-    """Run a shell command."""
+    """Run a shell command. Returns CompletedProcess or None."""
     try:
-        if capture_output:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=check)
-            return result
-        else:
-            subprocess.run(cmd, check=check)
+        result = subprocess.run(cmd, capture_output=capture_output, text=True, check=False)
+        
+        if result.returncode != 0 and check:
+            print_error(f"Command failed with exit code {result.returncode}: {' '.join(cmd)}")
+            if capture_output and result.stderr:
+                print_error(f"Error: {result.stderr.strip()}")
             return None
-    except subprocess.CalledProcessError as e:
-        print_error(f"Command failed: {' '.join(cmd)}")
-        if capture_output and e.stderr:
-            print_error(f"Error: {e.stderr}")
-        return None
+        
+        return result if (capture_output or not check) else None
+        
     except FileNotFoundError:
         print_error(f"Command not found: {cmd[0]}")
+        return None
+    except Exception as e:
+        print_error(f"Error running command: {e}")
         return None
 
 def check_prerequisites():
@@ -225,36 +227,62 @@ def create_directories():
         return False
     
     try:
-        # Create main backup directory
+        # Try to create main backup directory
         Path(backup_dir).mkdir(parents=True, exist_ok=True)
         print_success(f"Created: {backup_dir}")
         
-        # Create subdirectories
+    except PermissionError:
+        # Need sudo to create parent directories
+        print_warning(f"Permission denied creating {backup_dir}")
+        print_info(f"\nNeed sudo access to create directory in {Path(backup_dir).parent}")
+        
+        if ask_yes_no("Run with sudo to create directories?"):
+            current_user = os.getenv('USER')
+            print_info(f"\nRunning: sudo mkdir -p {backup_dir}")
+            result = run_command(['sudo', 'mkdir', '-p', backup_dir], check=False)
+            
+            if result is not None:
+                print_error("Failed to create directory with sudo")
+                return False
+            
+            print_success(f"Created: {backup_dir}")
+            
+            print_info(f"Running: sudo chown -R {current_user}:{current_user} {backup_dir}")
+            result = run_command(['sudo', 'chown', '-R', f'{current_user}:{current_user}', backup_dir], check=False)
+            
+            if result is not None:
+                print_error("Failed to set ownership")
+                return False
+            
+            print_success(f"Set ownership to {current_user}")
+        else:
+            print_error("Cannot proceed without creating backup directory")
+            return False
+    
+    # Create subdirectories
+    try:
         for subdir in ['postgres', 'contentstore', 'pg_wal']:
             path = Path(backup_dir) / subdir
             path.mkdir(exist_ok=True)
             print_success(f"Created: {path}")
         
-        # Set ownership if we have sudo and it's not already owned by current user
-        current_user = os.getenv('USER')
-        stat_info = os.stat(backup_dir)
-        
-        if stat_info.st_uid != os.getuid():
-            print_info(f"\nDirectory is not owned by {current_user}. Setting ownership...")
-            if ask_yes_no("Run 'sudo chown' to set ownership?"):
-                result = run_command(['sudo', 'chown', '-R', f'{current_user}:{current_user}', backup_dir])
-                if result is not None:
-                    print_success(f"Set ownership to {current_user}")
-        
         return True
         
-    except PermissionError as e:
-        print_error(f"Permission denied: {e}")
-        print_info(f"\nTry running: sudo mkdir -p {backup_dir} && sudo chown -R $USER:$USER {backup_dir}")
-        return False
     except Exception as e:
-        print_error(f"Error creating directories: {e}")
+        print_error(f"Error creating subdirectories: {e}")
         return False
+
+def get_postgres_user() -> Optional[str]:
+    """Detect or ask for the PostgreSQL system user."""
+    # Try common PostgreSQL user names
+    common_users = ['postgres', 'postgresql', 'pgsql']
+    
+    for user in common_users:
+        result = run_command(['id', user], capture_output=True, check=False)
+        if result and result.returncode == 0:
+            return user
+    
+    return None
 
 def configure_wal_archive():
     """Help configure WAL archive directory for PostgreSQL."""
@@ -269,12 +297,51 @@ def configure_wal_archive():
     
     wal_dir = Path(backup_dir) / 'pg_wal'
     
+    if not wal_dir.exists():
+        print_error(f"WAL directory does not exist: {wal_dir}")
+        print_error("Directory creation in Step 3 may have failed")
+        return False
+    
     print_info("PostgreSQL needs write access to the WAL archive directory.")
     print_info(f"WAL directory: {wal_dir}")
+    
+    # Detect PostgreSQL user
+    pg_user = get_postgres_user()
+    current_user = os.getenv('USER')
+    
+    if not pg_user:
+        print_warning("\nCould not detect PostgreSQL system user (tried: postgres, postgresql, pgsql)")
+        print_info("This might mean:")
+        print_info("  - PostgreSQL is not installed on this system")
+        print_info("  - PostgreSQL uses a different username")
+        print_info("  - Alfresco uses an embedded PostgreSQL")
+        
+        custom_user = input(f"{Colors.OKCYAN}Enter PostgreSQL system user (or press Enter to skip): {Colors.ENDC}").strip()
+        
+        if custom_user:
+            # Verify the user exists
+            result = run_command(['id', custom_user], capture_output=True, check=False)
+            if result and result.returncode == 0:
+                pg_user = custom_user
+            else:
+                print_error(f"User '{custom_user}' does not exist on this system")
+                print_warning("Skipping WAL directory configuration")
+                print_info("\nYou will need to configure this manually:")
+                print_info(f"  sudo chown <postgres_user>:{current_user} {wal_dir}")
+                print_info(f"  sudo chmod 770 {wal_dir}")
+                return False
+        else:
+            print_warning("Skipping WAL directory configuration")
+            print_info("\nYou will need to configure this manually:")
+            print_info(f"  sudo chown <postgres_user>:{current_user} {wal_dir}")
+            print_info(f"  sudo chmod 770 {wal_dir}")
+            return False
+    
+    print_info(f"\nDetected PostgreSQL user: {pg_user}")
     print_info(f"\nThis will:")
-    print_info(f"  1. Set ownership to postgres:{os.getenv('USER')}")
+    print_info(f"  1. Set ownership to {pg_user}:{current_user}")
     print_info(f"  2. Set permissions to 770 (rwxrwx---)")
-    print_info(f"  3. Allow both PostgreSQL and {os.getenv('USER')} to access the directory")
+    print_info(f"  3. Allow both PostgreSQL and {current_user} to access the directory")
     
     if not ask_yes_no("\nConfigure WAL directory permissions?"):
         print_warning("Skipping WAL directory configuration")
@@ -282,19 +349,29 @@ def configure_wal_archive():
         return False
     
     try:
-        current_user = os.getenv('USER')
-        
         # Change ownership
-        print_info(f"\nRunning: sudo chown postgres:{current_user} {wal_dir}")
-        result = run_command(['sudo', 'chown', f'postgres:{current_user}', str(wal_dir)], check=False)
-        if result is None:
-            print_success(f"Set ownership to postgres:{current_user}")
+        print_info(f"\nRunning: sudo chown {pg_user}:{current_user} {wal_dir}")
+        result = run_command(['sudo', 'chown', f'{pg_user}:{current_user}', str(wal_dir)], capture_output=True, check=False)
+        
+        if result and result.returncode == 0:
+            print_success(f"Set ownership to {pg_user}:{current_user}")
+        else:
+            print_error(f"Failed to set ownership")
+            if result and result.stderr:
+                print_error(f"Error: {result.stderr.strip()}")
+            return False
         
         # Change permissions
         print_info(f"Running: sudo chmod 770 {wal_dir}")
-        result = run_command(['sudo', 'chmod', '770', str(wal_dir)], check=False)
-        if result is None:
+        result = run_command(['sudo', 'chmod', '770', str(wal_dir)], capture_output=True, check=False)
+        
+        if result and result.returncode == 0:
             print_success("Set permissions to 770")
+        else:
+            print_error("Failed to set permissions")
+            if result and result.stderr:
+                print_error(f"Error: {result.stderr.strip()}")
+            return False
         
         return True
         

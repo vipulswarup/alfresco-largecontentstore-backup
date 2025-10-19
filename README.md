@@ -38,13 +38,16 @@ python3 setup.py
 The setup script will:
 - Check if all required tools are installed
 - Help you create the `.env` configuration file
-- Create all necessary backup directories
-- Configure proper permissions for WAL archiving
+- Create all necessary backup directories (will prompt for sudo if needed)
+- Configure proper permissions for WAL archiving (will prompt for sudo)
 - Show PostgreSQL configuration instructions
 - Create a virtual environment and install dependencies
 - Verify the installation
 
-**Important:** Run this as the same user that runs Alfresco (not root).
+**Important:**
+- Run this as the same user that runs Alfresco (not root)
+- You will need sudo access for creating directories in `/mnt/backups` and setting PostgreSQL permissions
+- The script asks permission before each step and explains what it will do
 
 After setup completes, you'll need to configure PostgreSQL manually (the script provides exact instructions).
 
