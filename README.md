@@ -175,16 +175,160 @@ sudo chown $USER:$USER /var/log/alfresco-backup-cron.log
 
 ## PostgreSQL WAL Configuration Requirements
 
-Before backups can run, the script validates that PostgreSQL is properly configured for WAL archiving. It checks for `postgresql.conf` in these locations:
+Before backups can run, PostgreSQL must be properly configured for WAL (Write-Ahead Log) archiving to enable Point-in-Time Recovery (PITR).
+
+### Step 1: Locate PostgreSQL Configuration File
+
+The script checks for `postgresql.conf` in these locations:
 1. `ALF_BASE_DIR/alf_data/postgresql/postgresql.conf`
 2. `ALF_BASE_DIR/postgresql/postgresql.conf`
 
-**Required settings:**
-- `wal_level = replica` or `logical` (NOT minimal)
-- `archive_mode = on`
-- `archive_command` must be set to copy WAL files
+For standard PostgreSQL installations on Ubuntu, find your config file:
+```bash
+# Find postgresql.conf location
+sudo -u postgres psql -c "SHOW config_file;"
 
-If any of these settings are missing or incorrect, the backup will fail immediately with a clear error message indicating what needs to be fixed.
+# Or search for it
+sudo find / -name postgresql.conf 2>/dev/null | grep -v snap
+```
+
+### Step 2: Create WAL Archive Directory
+
+```bash
+# Create WAL archive directory (must match BACKUP_DIR/pg_wal in your .env)
+sudo mkdir -p /mnt/backups/alfresco/pg_wal
+sudo chown postgres:postgres /mnt/backups/alfresco/pg_wal
+sudo chmod 700 /mnt/backups/alfresco/pg_wal
+```
+
+### Step 3: Edit PostgreSQL Configuration
+
+**Required settings:**
+
+```bash
+# Edit postgresql.conf (use the path from Step 1)
+sudo nano /etc/postgresql/14/main/postgresql.conf
+```
+
+Add or modify these settings:
+
+```conf
+# WAL archiving settings
+wal_level = replica                    # or 'logical' (NOT 'minimal')
+archive_mode = on                      # Enable archiving
+archive_command = 'test ! -f /mnt/backups/alfresco/pg_wal/%f && cp %p /mnt/backups/alfresco/pg_wal/%f'
+archive_timeout = 300                  # Force WAL switch every 5 minutes (optional)
+
+# Recommended additional settings for backup
+max_wal_senders = 3                    # Allow pg_basebackup connections
+wal_keep_size = 1GB                    # Keep extra WAL for safety (PostgreSQL 13+)
+# OR for PostgreSQL 12 and earlier:
+# wal_keep_segments = 64
+```
+
+**Important Notes:**
+- Replace `/mnt/backups/alfresco/pg_wal` with your actual `BACKUP_DIR/pg_wal` path
+- The `test ! -f` prevents overwriting existing WAL files
+- `%p` is the path of the file to archive
+- `%f` is the file name only
+
+### Step 4: Configure PostgreSQL Authentication (for pg_basebackup)
+
+Edit `pg_hba.conf` to allow replication connections:
+
+```bash
+# Find pg_hba.conf location
+sudo -u postgres psql -c "SHOW hba_file;"
+
+# Edit the file
+sudo nano /etc/postgresql/14/main/pg_hba.conf
+```
+
+Add this line (adjust based on your setup):
+
+```conf
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+# For local backups using unix socket
+local   replication     alfresco                                md5
+# Or for network backups
+host    replication     alfresco        127.0.0.1/32            md5
+host    replication     alfresco        ::1/128                 md5
+```
+
+### Step 5: Restart PostgreSQL
+
+```bash
+# Restart PostgreSQL to apply changes
+sudo systemctl restart postgresql
+
+# Verify PostgreSQL is running
+sudo systemctl status postgresql
+```
+
+### Step 6: Verify WAL Configuration
+
+```bash
+# Check WAL settings
+sudo -u postgres psql -c "SHOW wal_level;"
+sudo -u postgres psql -c "SHOW archive_mode;"
+sudo -u postgres psql -c "SHOW archive_command;"
+
+# Expected output:
+# wal_level      | replica (or logical)
+# archive_mode   | on
+# archive_command| test ! -f /mnt/backups/alfresco/pg_wal/%f && cp %p /mnt/backups/alfresco/pg_wal/%f
+```
+
+### Step 7: Test WAL Archiving
+
+```bash
+# Force a WAL segment switch and verify archiving works
+sudo -u postgres psql -c "SELECT pg_switch_wal();"  # PostgreSQL 10+
+# OR for PostgreSQL 9.6 and earlier:
+# sudo -u postgres psql -c "SELECT pg_switch_xlog();"
+
+# Check if WAL files are being archived
+ls -lh /mnt/backups/alfresco/pg_wal/
+
+# You should see WAL files like: 000000010000000000000001
+```
+
+### Step 8: Verify pg_basebackup Access
+
+```bash
+# Test that pg_basebackup can connect (will prompt for password)
+pg_basebackup -h localhost -U alfresco -D /tmp/test_backup -Ft -z -P --wal-method=stream
+
+# If successful, remove the test backup
+rm -rf /tmp/test_backup
+```
+
+If you see errors, check:
+- Database user has replication privileges: `ALTER USER alfresco REPLICATION;`
+- `pg_hba.conf` allows replication connections
+- Password is correct
+
+### Troubleshooting WAL Configuration
+
+**Script validation fails:**
+The backup script will check these settings before running and provide specific error messages if something is wrong.
+
+**WAL files not appearing in archive directory:**
+```bash
+# Check PostgreSQL logs for archive_command errors
+sudo tail -f /var/log/postgresql/postgresql-14-main.log
+
+# Common issues:
+# - Wrong permissions on archive directory
+# - Archive directory doesn't exist
+# - Disk space full
+```
+
+**Replication permission denied:**
+```bash
+# Grant replication privilege to your backup user
+sudo -u postgres psql -c "ALTER USER alfresco REPLICATION;"
+```
 
 ## Backup Structure
 
