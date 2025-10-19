@@ -20,14 +20,63 @@ Python-based backup system for Alfresco Content Management System with PostgreSQ
 - rsync
 - Sufficient disk space for backups
 
-## Installation
+## Installation on Ubuntu
 
-1. Install Python dependencies:
+### Step 1: Update System Packages
+```bash
+sudo apt-get update
+```
+
+### Step 2: Install Python 3 and pip
+```bash
+sudo apt-get install -y python3 python3-pip python3-venv
+```
+
+### Step 3: Install PostgreSQL Client Tools
+```bash
+# Install PostgreSQL client tools (includes pg_basebackup)
+sudo apt-get install -y postgresql-client
+
+# Verify installation
+pg_basebackup --version
+```
+
+### Step 4: Install rsync
+```bash
+sudo apt-get install -y rsync
+
+# Verify installation
+rsync --version
+```
+
+### Step 5: Clone or Download This Repository
+```bash
+cd /opt
+sudo git clone https://github.com/YOUR_USERNAME/alfresco-largecontentstore-backup.git
+cd alfresco-largecontentstore-backup
+```
+
+### Step 6: Create Virtual Environment (Recommended)
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### Step 7: Install Python Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Create your `.env` file from the example:
+### Step 8: Create Backup Directory
+```bash
+# Create backup directory with appropriate permissions
+sudo mkdir -p /mnt/backups/alfresco
+sudo chown $USER:$USER /mnt/backups/alfresco
+```
+
+### Step 9: Configure Environment Variables
+
+Create your `.env` file from the example:
 ```bash
 # Copy and edit with your actual values
 cat > .env << 'EOF'
@@ -54,15 +103,34 @@ ALERT_FROM=backups@yourcompany.com
 EOF
 ```
 
-3. Make the backup script executable:
+### Step 10: Set File Permissions
 ```bash
+# Make the backup script executable
 chmod +x backup.py
+
+# Secure your .env file
+chmod 600 .env
+```
+
+### Step 11: Verify Installation
+```bash
+# Test that all tools are available
+python3 --version
+pg_basebackup --version
+rsync --version
+
+# Test the backup script help
+python3 backup.py --help 2>/dev/null || echo "Ready to configure and run backups"
 ```
 
 ## Usage
 
-Run the backup:
+### Running Backups Manually
+
+If using virtual environment:
 ```bash
+cd /opt/alfresco-largecontentstore-backup
+source venv/bin/activate
 python backup.py
 ```
 
@@ -71,11 +139,32 @@ Or specify a custom env file location:
 python backup.py /path/to/custom.env
 ```
 
-## Scheduling with Cron
+### Scheduling with Cron
 
-Add to crontab for daily backups at 2 AM:
+For daily backups at 2 AM, add to crontab:
+
+**If using virtual environment:**
 ```bash
-0 2 * * * cd /path/to/peso-backup-system && python backup.py >> /var/log/alfresco-backup-cron.log 2>&1
+# Edit crontab
+crontab -e
+
+# Add this line:
+0 2 * * * cd /opt/alfresco-largecontentstore-backup && /opt/alfresco-largecontentstore-backup/venv/bin/python /opt/alfresco-largecontentstore-backup/backup.py >> /var/log/alfresco-backup-cron.log 2>&1
+```
+
+**If installed system-wide:**
+```bash
+# Edit crontab
+crontab -e
+
+# Add this line:
+0 2 * * * cd /opt/alfresco-largecontentstore-backup && python3 backup.py >> /var/log/alfresco-backup-cron.log 2>&1
+```
+
+**Create the log file with proper permissions:**
+```bash
+sudo touch /var/log/alfresco-backup-cron.log
+sudo chown $USER:$USER /var/log/alfresco-backup-cron.log
 ```
 
 ## What Gets Backed Up
@@ -144,7 +233,7 @@ The Python version has identical performance to the bash script because:
 - See error message for specific missing/incorrect settings
 
 **pg_basebackup not found**:
-- Install PostgreSQL client tools: `apt-get install postgresql-client`
+- Install PostgreSQL client tools: `sudo apt-get install -y postgresql-client`
 
 **Email not sending**:
 - Check SMTP credentials in .env
