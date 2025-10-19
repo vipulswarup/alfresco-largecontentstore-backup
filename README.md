@@ -384,16 +384,6 @@ The Python version has identical performance to the bash script because:
 - For Gmail, use an app-specific password
 - Check firewall allows SMTP port (587)
 
-## Migration from Bash Script
-
-The original `alfresco-backup.sh` is kept for reference. To migrate:
-
-1. Run one test backup with Python version to a different directory
-2. Verify backup integrity
-3. Update cron job to use Python version
-4. Monitor for one week
-5. Remove bash script once confident
-
 ## Security
 
 - `.env` file is gitignored and contains sensitive credentials
