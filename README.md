@@ -51,27 +51,36 @@ rsync --version
 
 ### Step 5: Clone or Download This Repository
 ```bash
+# Clone as your Alfresco user (not root)
 cd /opt
-sudo git clone https://github.com/YOUR_USERNAME/alfresco-largecontentstore-backup.git
+sudo mkdir -p alfresco-largecontentstore-backup
+sudo chown $USER:$USER alfresco-largecontentstore-backup
+git clone https://github.com/YOUR_USERNAME/alfresco-largecontentstore-backup.git
 cd alfresco-largecontentstore-backup
+
+# Ensure the directory is owned by the current user
+sudo chown -R $USER:$USER /opt/alfresco-largecontentstore-backup
 ```
 
 ### Step 6: Create Virtual Environment (Recommended)
 ```bash
+# Create venv as regular user (NOT with sudo)
 python3 -m venv venv
 source venv/bin/activate
 ```
 
 ### Step 7: Install Python Dependencies
 ```bash
+# Install packages in the virtual environment (no sudo needed)
 pip install -r requirements.txt
 ```
 
 ### Step 8: Create Backup Directory
 ```bash
-# Create backup directory with appropriate permissions
+# Create backup directory owned by current user
 sudo mkdir -p /mnt/backups/alfresco
-sudo chown $USER:$USER /mnt/backups/alfresco
+sudo chown -R $USER:$USER /mnt/backups/alfresco
+sudo chmod 755 /mnt/backups/alfresco
 ```
 
 ### Step 9: Configure Environment Variables
@@ -141,20 +150,22 @@ python backup.py /path/to/custom.env
 
 ### Scheduling with Cron
 
+**Important:** Run cron jobs as the same user that runs Alfresco (not root). This ensures proper file permissions.
+
 For daily backups at 2 AM, add to crontab:
 
 **If using virtual environment:**
 ```bash
-# Edit crontab
+# Edit crontab as the Alfresco user (NOT using sudo crontab)
 crontab -e
 
-# Add this line:
+# Add this line (adjust paths if needed):
 0 2 * * * cd /opt/alfresco-largecontentstore-backup && /opt/alfresco-largecontentstore-backup/venv/bin/python /opt/alfresco-largecontentstore-backup/backup.py >> /var/log/alfresco-backup-cron.log 2>&1
 ```
 
 **If installed system-wide:**
 ```bash
-# Edit crontab
+# Edit crontab as the Alfresco user (NOT using sudo crontab)
 crontab -e
 
 # Add this line:
@@ -165,6 +176,7 @@ crontab -e
 ```bash
 sudo touch /var/log/alfresco-backup-cron.log
 sudo chown $USER:$USER /var/log/alfresco-backup-cron.log
+sudo chmod 644 /var/log/alfresco-backup-cron.log
 ```
 
 ## What Gets Backed Up
@@ -197,8 +209,10 @@ sudo find / -name postgresql.conf 2>/dev/null | grep -v snap
 ```bash
 # Create WAL archive directory (must match BACKUP_DIR/pg_wal in your .env)
 sudo mkdir -p /mnt/backups/alfresco/pg_wal
-sudo chown postgres:postgres /mnt/backups/alfresco/pg_wal
-sudo chmod 700 /mnt/backups/alfresco/pg_wal
+
+# Make it writable by both postgres (for archiving) and your user (for monitoring)
+sudo chown postgres:$USER /mnt/backups/alfresco/pg_wal
+sudo chmod 770 /mnt/backups/alfresco/pg_wal
 ```
 
 ### Step 3: Edit PostgreSQL Configuration
@@ -365,6 +379,22 @@ The Python version has identical performance to the bash script because:
 - Same rsync hardlink strategy for space efficiency
 
 ## Troubleshooting
+
+**Permission denied when installing packages in venv**:
+If you created the venv with `sudo`, it's owned by root. Fix it:
+```bash
+# Remove the root-owned venv
+cd /opt/alfresco-largecontentstore-backup
+sudo rm -rf venv
+
+# Ensure the directory is owned by your user
+sudo chown -R $USER:$USER /opt/alfresco-largecontentstore-backup
+
+# Recreate venv as regular user (no sudo)
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
 **Lock file error**:
 - Another backup is running, or a previous backup crashed
