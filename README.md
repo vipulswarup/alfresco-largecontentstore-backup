@@ -20,7 +20,39 @@ Python-based backup system for Alfresco Content Management System with PostgreSQ
 - rsync
 - Sufficient disk space for backups
 
-## Installation on Ubuntu
+## Quick Installation (Recommended)
+
+### Automated Setup Script
+
+The easiest way to set up the backup system is using the interactive setup script:
+
+```bash
+# Clone the repository
+git clone https://github.com/YOUR_USERNAME/alfresco-largecontentstore-backup.git
+cd alfresco-largecontentstore-backup
+
+# Run the setup wizard
+python3 setup.py
+```
+
+The setup script will:
+- Check if all required tools are installed
+- Help you create the `.env` configuration file
+- Create all necessary backup directories
+- Configure proper permissions for WAL archiving
+- Show PostgreSQL configuration instructions
+- Create a virtual environment and install dependencies
+- Verify the installation
+
+**Important:** Run this as the same user that runs Alfresco (not root).
+
+After setup completes, you'll need to configure PostgreSQL manually (the script provides exact instructions).
+
+---
+
+## Manual Installation on Ubuntu
+
+If you prefer to set up manually or need more control, follow these steps:
 
 ### Step 1: Update System Packages
 ```bash
