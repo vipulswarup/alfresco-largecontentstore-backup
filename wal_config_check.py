@@ -9,7 +9,7 @@ def check_wal_configuration(config):
     Validate that PostgreSQL has proper WAL archiving settings enabled.
     
     Checks for:
-    - wal_level = replica or logical (not minimal)
+    - wal_level = hot_standby (PostgreSQL 9.4) or replica/logical (PostgreSQL 9.6+) - not minimal
     - archive_mode = on
     - archive_command is set
     
@@ -55,17 +55,21 @@ def check_wal_configuration(config):
         result['settings'] = settings
         
         # Validate wal_level
+        # Valid values for PostgreSQL:
+        # - 9.4-9.5: minimal, archive, hot_standby, logical
+        # - 9.6+: minimal, replica, logical
+        valid_wal_levels = ['replica', 'logical', 'hot_standby', 'archive']
         wal_level = settings.get('wal_level', '').lower()
         if not wal_level:
             result['warnings'].append("wal_level not explicitly set (using default)")
         elif wal_level == 'minimal':
             result['error'] = (
                 f"wal_level is set to 'minimal' which does not support archiving.\n"
-                f"Required: wal_level = 'replica' or 'logical'\n"
+                f"Required: wal_level = 'hot_standby' (PostgreSQL 9.4) or 'replica' (PostgreSQL 9.6+)\n"
                 f"Found in: {config_file}"
             )
             return result
-        elif wal_level not in ['replica', 'logical']:
+        elif wal_level not in valid_wal_levels:
             result['warnings'].append(f"Unexpected wal_level value: {wal_level}")
         
         # Validate archive_mode

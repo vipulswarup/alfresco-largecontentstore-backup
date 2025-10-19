@@ -41,7 +41,9 @@ The setup script will:
 - Create all necessary backup directories (in `/mnt/backups` or similar)
 - Configure proper permissions for WAL archiving
 - **Automatically configure Alfresco's embedded PostgreSQL** for WAL archiving
-  - Updates `postgresql.conf` with WAL settings
+  - Detects PostgreSQL version (9.4 for Alfresco 5.2)
+  - Updates `postgresql.conf` with version-appropriate WAL settings
+  - Uses `hot_standby` for PostgreSQL 9.4, `replica` for 9.6+
   - Updates `pg_hba.conf` for replication access
   - Creates backups of original config files
 - Create a virtual environment and install dependencies
@@ -262,17 +264,17 @@ sudo nano /etc/postgresql/14/main/postgresql.conf
 Add or modify these settings:
 
 ```conf
-# WAL archiving settings
-wal_level = replica                    # or 'logical' (NOT 'minimal')
+# WAL archiving settings for PostgreSQL 9.4 (Alfresco 5.2)
+wal_level = hot_standby                # Use 'hot_standby' for 9.4, 'replica' for 9.6+
 archive_mode = on                      # Enable archiving
 archive_command = 'test ! -f /mnt/backups/alfresco/pg_wal/%f && cp %p /mnt/backups/alfresco/pg_wal/%f'
 archive_timeout = 300                  # Force WAL switch every 5 minutes (optional)
 
 # Recommended additional settings for backup
 max_wal_senders = 3                    # Allow pg_basebackup connections
-wal_keep_size = 1GB                    # Keep extra WAL for safety (PostgreSQL 13+)
-# OR for PostgreSQL 12 and earlier:
-# wal_keep_segments = 64
+wal_keep_segments = 64                 # Keep extra WAL segments (PostgreSQL 9.4-12)
+# For PostgreSQL 13+, use instead:
+# wal_keep_size = 1GB
 ```
 
 **Important Notes:**

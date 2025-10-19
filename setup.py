@@ -548,6 +548,38 @@ def update_pg_hba_conf(file_path: Path, pg_user: str) -> bool:
         print_error(f"Failed to update pg_hba.conf: {e}")
         return False
 
+def detect_postgresql_version(pg_conf: Path) -> tuple:
+    """Detect PostgreSQL version from config file path or by checking version."""
+    # Try to read version from config file comments or nearby files
+    version_file = pg_conf.parent / 'PG_VERSION'
+    
+    if version_file.exists():
+        try:
+            with open(version_file, 'r') as f:
+                version_str = f.read().strip()
+                # Convert "9.4" to (9, 4)
+                parts = version_str.split('.')
+                major = int(parts[0])
+                minor = int(parts[1]) if len(parts) > 1 else 0
+                return (major, minor)
+        except:
+            pass
+    
+    # Default to PostgreSQL 9.4 (Alfresco 5.2 default)
+    print_warning("Could not detect PostgreSQL version, assuming 9.4 (Alfresco 5.2)")
+    return (9, 4)
+
+def get_wal_level_value(pg_version: tuple) -> str:
+    """Get appropriate wal_level value based on PostgreSQL version."""
+    major, minor = pg_version
+    
+    # PostgreSQL 9.6+ uses "replica"
+    # PostgreSQL 9.4-9.5 uses "hot_standby"
+    if major > 9 or (major == 9 and minor >= 6):
+        return 'replica'
+    else:
+        return 'hot_standby'
+
 def configure_postgresql():
     """Automatically configure PostgreSQL for WAL archiving."""
     print_header("Step 5: Configure PostgreSQL for WAL Archiving")
@@ -563,7 +595,7 @@ def configure_postgresql():
     
     wal_dir = str(Path(backup_dir) / 'pg_wal')
     
-    print_info("Alfresco 5.2 comes with embedded PostgreSQL.")
+    print_info("Alfresco 5.2 comes with embedded PostgreSQL 9.4.")
     print_info("This step will configure it for WAL archiving to enable backups.")
     print_info(f"\nLooking for PostgreSQL configuration in: {alf_base_dir}")
     
@@ -578,6 +610,13 @@ def configure_postgresql():
     
     print_success(f"Found postgresql.conf: {pg_conf}")
     
+    # Detect PostgreSQL version
+    pg_version = detect_postgresql_version(pg_conf)
+    print_info(f"Detected PostgreSQL version: {pg_version[0]}.{pg_version[1]}")
+    
+    # Get appropriate wal_level for this version
+    wal_level_value = get_wal_level_value(pg_version)
+    
     # Find pg_hba.conf
     pg_hba = find_pg_hba_conf(alf_base_dir)
     if not pg_hba:
@@ -587,11 +626,20 @@ def configure_postgresql():
     print_success(f"Found pg_hba.conf: {pg_hba}")
     
     print_info("\nThe following settings will be configured:")
-    print_info("  1. wal_level = replica")
+    print_info(f"  1. wal_level = {wal_level_value}")
+    if pg_version[0] == 9 and pg_version[1] == 4:
+        print_info("     (Using 'hot_standby' for PostgreSQL 9.4)")
     print_info("  2. archive_mode = on")
     print_info(f"  3. archive_command = 'test ! -f {wal_dir}/%f && cp %p {wal_dir}/%f'")
     print_info("  4. max_wal_senders = 3")
-    print_info("  5. Add replication entry to pg_hba.conf")
+    
+    # For PostgreSQL 9.4, use wal_keep_segments instead of wal_keep_size
+    if pg_version[0] == 9 and pg_version[1] < 13:
+        print_info("  5. wal_keep_segments = 64 (for PostgreSQL 9.4)")
+    else:
+        print_info("  5. wal_keep_size = 1GB")
+    
+    print_info("  6. Add replication entry to pg_hba.conf")
     print_info("\n⚠ Original files will be backed up before modification")
     print_info("⚠ PostgreSQL will need to be restarted after these changes")
     
@@ -613,11 +661,17 @@ def configure_postgresql():
     print_info("\nUpdating postgresql.conf...")
     
     settings = [
-        ('wal_level', 'replica'),
+        ('wal_level', wal_level_value),
         ('archive_mode', 'on'),
         ('archive_command', f"'test ! -f {wal_dir}/%f && cp %p {wal_dir}/%f'"),
         ('max_wal_senders', '3'),
     ]
+    
+    # Add version-specific setting
+    if pg_version[0] == 9 and pg_version[1] < 13:
+        settings.append(('wal_keep_segments', '64'))
+    else:
+        settings.append(('wal_keep_size', '1GB'))
     
     for setting, value in settings:
         if not update_postgresql_conf_setting(pg_conf, setting, value, wal_dir):
