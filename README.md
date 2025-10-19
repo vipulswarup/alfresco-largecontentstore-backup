@@ -40,18 +40,21 @@ The setup script will:
 - Help you create the `.env` configuration file
 - Create all necessary backup directories (in `/mnt/backups` or similar)
 - Configure proper permissions for WAL archiving
-- Show PostgreSQL configuration instructions
+- **Automatically configure Alfresco's embedded PostgreSQL** for WAL archiving
+  - Updates `postgresql.conf` with WAL settings
+  - Updates `pg_hba.conf` for replication access
+  - Creates backups of original config files
 - Create a virtual environment and install dependencies
 - Verify the installation
 
 **Important:**
-- **Recommended:** Run with `sudo` to avoid permission issues creating directories
+- **Recommended:** Run with `sudo` to avoid permission issues
 - When run with sudo, all files will be owned by the actual user (not root)
 - The script detects who ran sudo and ensures proper ownership
-- You can also run without sudo, but may need to enter password multiple times
 - The script asks permission before each step and explains what it will do
+- PostgreSQL configuration files will be backed up before modification
 
-After setup completes, you'll need to configure PostgreSQL manually (the script provides exact instructions).
+After setup completes, you'll need to restart Alfresco for PostgreSQL changes to take effect.
 
 ---
 
@@ -224,22 +227,17 @@ sudo chmod 644 /var/log/alfresco-backup-cron.log
 
 ## PostgreSQL WAL Configuration Requirements
 
-Before backups can run, PostgreSQL must be properly configured for WAL (Write-Ahead Log) archiving to enable Point-in-Time Recovery (PITR).
+**Note:** If you used the automated setup script (`setup.py`), PostgreSQL is already configured. This section is for reference or manual configuration.
+
+Alfresco 5.2 comes with embedded PostgreSQL. Before backups can run, it must be configured for WAL (Write-Ahead Log) archiving to enable Point-in-Time Recovery (PITR).
 
 ### Step 1: Locate PostgreSQL Configuration File
 
-The script checks for `postgresql.conf` in these locations:
-1. `ALF_BASE_DIR/alf_data/postgresql/postgresql.conf`
-2. `ALF_BASE_DIR/postgresql/postgresql.conf`
+For Alfresco's embedded PostgreSQL, config files are typically in:
+1. `ALF_BASE_DIR/postgresql/postgresql.conf`
+2. `ALF_BASE_DIR/alf_data/postgresql/postgresql.conf`
 
-For standard PostgreSQL installations on Ubuntu, find your config file:
-```bash
-# Find postgresql.conf location
-sudo -u postgres psql -c "SHOW config_file;"
-
-# Or search for it
-sudo find / -name postgresql.conf 2>/dev/null | grep -v snap
-```
+The automated setup script will find and configure these automatically.
 
 ### Step 2: Create WAL Archive Directory
 

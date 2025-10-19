@@ -432,71 +432,225 @@ def configure_wal_archive():
         print_error(f"Error configuring WAL directory: {e}")
         return False
 
-def show_postgresql_config():
-    """Show PostgreSQL configuration instructions."""
-    print_header("Step 5: PostgreSQL Configuration")
+def find_postgresql_conf(alf_base_dir: str) -> Optional[Path]:
+    """Find postgresql.conf file for Alfresco embedded PostgreSQL."""
+    # Try common locations for Alfresco embedded PostgreSQL
+    possible_paths = [
+        Path(alf_base_dir) / 'postgresql' / 'postgresql.conf',
+        Path(alf_base_dir) / 'alf_data' / 'postgresql' / 'postgresql.conf',
+    ]
+    
+    for path in possible_paths:
+        if path.exists():
+            return path
+    
+    return None
+
+def find_pg_hba_conf(alf_base_dir: str) -> Optional[Path]:
+    """Find pg_hba.conf file for Alfresco embedded PostgreSQL."""
+    # Try common locations for Alfresco embedded PostgreSQL
+    possible_paths = [
+        Path(alf_base_dir) / 'postgresql' / 'pg_hba.conf',
+        Path(alf_base_dir) / 'alf_data' / 'postgresql' / 'pg_hba.conf',
+    ]
+    
+    for path in possible_paths:
+        if path.exists():
+            return path
+    
+    return None
+
+def backup_file(file_path: Path) -> bool:
+    """Create a backup of a file with .backup extension."""
+    backup_path = Path(str(file_path) + '.backup')
+    
+    if backup_path.exists():
+        print_info(f"Backup already exists: {backup_path}")
+        return True
+    
+    try:
+        shutil.copy2(file_path, backup_path)
+        print_success(f"Created backup: {backup_path}")
+        return True
+    except Exception as e:
+        print_error(f"Failed to create backup: {e}")
+        return False
+
+def update_postgresql_conf_setting(file_path: Path, setting: str, value: str, wal_dir: str = None) -> bool:
+    """Update or add a setting in postgresql.conf."""
+    try:
+        with open(file_path, 'r') as f:
+            lines = f.readlines()
+        
+        # Replace %p and %f placeholders in archive_command if needed
+        if setting == 'archive_command' and wal_dir:
+            value = value.replace('%WAL_DIR%', wal_dir)
+        
+        setting_found = False
+        new_lines = []
+        
+        for line in lines:
+            stripped = line.strip()
+            
+            # Check if this line contains our setting
+            if stripped.startswith(setting + ' ') or stripped.startswith(setting + '=') or stripped.startswith('#' + setting):
+                if not setting_found:
+                    # Replace with our value
+                    new_lines.append(f"{setting} = {value}\n")
+                    setting_found = True
+                    print_info(f"  Updated: {setting} = {value}")
+                # Skip duplicate lines
+            else:
+                new_lines.append(line)
+        
+        # If setting wasn't found, add it at the end
+        if not setting_found:
+            new_lines.append(f"\n# Added by backup setup script\n")
+            new_lines.append(f"{setting} = {value}\n")
+            print_info(f"  Added: {setting} = {value}")
+        
+        # Write back
+        with open(file_path, 'w') as f:
+            f.writelines(new_lines)
+        
+        return True
+        
+    except Exception as e:
+        print_error(f"Failed to update {setting}: {e}")
+        return False
+
+def update_pg_hba_conf(file_path: Path, pg_user: str) -> bool:
+    """Add replication entry to pg_hba.conf if not already present."""
+    try:
+        with open(file_path, 'r') as f:
+            lines = f.readlines()
+        
+        # Check if replication entry already exists
+        replication_entry = f"local   replication     {pg_user}"
+        entry_exists = any(replication_entry in line for line in lines)
+        
+        if entry_exists:
+            print_info(f"  Replication entry for {pg_user} already exists")
+            return True
+        
+        # Add the entry
+        new_lines = lines.copy()
+        new_lines.append(f"\n# Added by backup setup script for pg_basebackup\n")
+        new_lines.append(f"local   replication     {pg_user}                                md5\n")
+        
+        with open(file_path, 'w') as f:
+            f.writelines(new_lines)
+        
+        print_info(f"  Added: local replication entry for {pg_user}")
+        return True
+        
+    except Exception as e:
+        print_error(f"Failed to update pg_hba.conf: {e}")
+        return False
+
+def configure_postgresql():
+    """Automatically configure PostgreSQL for WAL archiving."""
+    print_header("Step 5: Configure PostgreSQL for WAL Archiving")
     
     config = load_env_config()
     backup_dir = config.get('BACKUP_DIR')
-    
-    if not backup_dir:
-        print_error("BACKUP_DIR not found in .env file")
-        return False
-    
-    wal_dir = Path(backup_dir) / 'pg_wal'
-    
-    print_info("PostgreSQL must be configured for WAL archiving.")
-    print_info("This requires editing postgresql.conf and pg_hba.conf files.")
-    print_info("\nThese changes require PostgreSQL restart and should be reviewed carefully.")
-    
-    if not ask_yes_no("\nShow PostgreSQL configuration instructions?"):
-        print_warning("Skipping PostgreSQL configuration instructions")
-        return False
-    
-    print_info("\n" + "="*80)
-    print_info("POSTGRESQL.CONF SETTINGS")
-    print_info("="*80)
-    
-    print_info("\n1. Find your postgresql.conf file:")
-    print("   sudo -u postgres psql -c \"SHOW config_file;\"")
-    
-    print_info("\n2. Add or modify these settings:")
-    print(f"""
-   wal_level = replica
-   archive_mode = on
-   archive_command = 'test ! -f {wal_dir}/%f && cp %p {wal_dir}/%f'
-   max_wal_senders = 3
-   wal_keep_size = 1GB
-""")
-    
-    print_info("\n" + "="*80)
-    print_info("PG_HBA.CONF SETTINGS")
-    print_info("="*80)
-    
-    print_info("\n1. Find your pg_hba.conf file:")
-    print("   sudo -u postgres psql -c \"SHOW hba_file;\"")
-    
-    print_info("\n2. Add this line to allow replication connections:")
+    alf_base_dir = config.get('ALF_BASE_DIR')
     pg_user = config.get('PGUSER', 'alfresco')
-    print(f"   local   replication     {pg_user}                                md5")
     
+    if not backup_dir or not alf_base_dir:
+        print_error("BACKUP_DIR or ALF_BASE_DIR not found in .env file")
+        return False
+    
+    wal_dir = str(Path(backup_dir) / 'pg_wal')
+    
+    print_info("Alfresco 5.2 comes with embedded PostgreSQL.")
+    print_info("This step will configure it for WAL archiving to enable backups.")
+    print_info(f"\nLooking for PostgreSQL configuration in: {alf_base_dir}")
+    
+    # Find postgresql.conf
+    pg_conf = find_postgresql_conf(alf_base_dir)
+    if not pg_conf:
+        print_error(f"Could not find postgresql.conf in {alf_base_dir}")
+        print_info("\nTried these locations:")
+        print_info(f"  {alf_base_dir}/postgresql/postgresql.conf")
+        print_info(f"  {alf_base_dir}/alf_data/postgresql/postgresql.conf")
+        return False
+    
+    print_success(f"Found postgresql.conf: {pg_conf}")
+    
+    # Find pg_hba.conf
+    pg_hba = find_pg_hba_conf(alf_base_dir)
+    if not pg_hba:
+        print_error(f"Could not find pg_hba.conf in {alf_base_dir}")
+        return False
+    
+    print_success(f"Found pg_hba.conf: {pg_hba}")
+    
+    print_info("\nThe following settings will be configured:")
+    print_info("  1. wal_level = replica")
+    print_info("  2. archive_mode = on")
+    print_info(f"  3. archive_command = 'test ! -f {wal_dir}/%f && cp %p {wal_dir}/%f'")
+    print_info("  4. max_wal_senders = 3")
+    print_info("  5. Add replication entry to pg_hba.conf")
+    print_info("\n⚠ Original files will be backed up before modification")
+    print_info("⚠ PostgreSQL will need to be restarted after these changes")
+    
+    if not ask_yes_no("\nProceed with PostgreSQL configuration?"):
+        print_warning("Skipping PostgreSQL configuration")
+        print_warning("Backups will not work until PostgreSQL is configured manually")
+        return False
+    
+    running_as_root = is_running_as_root()
+    
+    # Backup postgresql.conf
+    print_info("\nBacking up configuration files...")
+    if not backup_file(pg_conf):
+        return False
+    if not backup_file(pg_hba):
+        return False
+    
+    # Update postgresql.conf settings
+    print_info("\nUpdating postgresql.conf...")
+    
+    settings = [
+        ('wal_level', 'replica'),
+        ('archive_mode', 'on'),
+        ('archive_command', f"'test ! -f {wal_dir}/%f && cp %p {wal_dir}/%f'"),
+        ('max_wal_senders', '3'),
+    ]
+    
+    for setting, value in settings:
+        if not update_postgresql_conf_setting(pg_conf, setting, value, wal_dir):
+            print_error(f"Failed to update {setting}")
+            return False
+    
+    print_success("postgresql.conf updated successfully")
+    
+    # Update pg_hba.conf
+    print_info("\nUpdating pg_hba.conf...")
+    if not update_pg_hba_conf(pg_hba, pg_user):
+        print_error("Failed to update pg_hba.conf")
+        return False
+    
+    print_success("pg_hba.conf updated successfully")
+    
+    # Instructions for restarting
     print_info("\n" + "="*80)
-    print_info("GRANT REPLICATION PRIVILEGE")
+    print_info("IMPORTANT: RESTART POSTGRESQL")
     print_info("="*80)
     
-    print_info("\nGrant replication privilege to your backup user:")
-    print(f"   sudo -u postgres psql -c \"ALTER USER {pg_user} REPLICATION;\"")
+    print_warning("\n⚠ PostgreSQL must be restarted for changes to take effect")
+    print_info("\nTo restart Alfresco's embedded PostgreSQL:")
+    print_info("  1. Stop Alfresco:")
+    print_info(f"     {alf_base_dir}/alfresco.sh stop")
+    print_info("  2. Start Alfresco:")
+    print_info(f"     {alf_base_dir}/alfresco.sh start")
+    print_info("\nOR if you have systemd service:")
+    print_info("  sudo systemctl restart alfresco")
     
-    print_info("\n" + "="*80)
-    print_info("RESTART POSTGRESQL")
-    print_info("="*80)
-    
-    print_info("\nAfter making changes, restart PostgreSQL:")
-    print("   sudo systemctl restart postgresql")
-    print("   sudo systemctl status postgresql")
-    
-    print_warning("\n⚠ Important: These changes must be made manually by a database administrator.")
-    print_warning("⚠ The backup script will validate these settings before running.")
+    if ask_yes_no("\nWould you like to see the grant replication privilege command?"):
+        print_info("\nAfter restarting, grant replication privilege:")
+        print_info(f"  psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
     
     return True
 
@@ -662,8 +816,8 @@ def main():
     # Step 4: Configure WAL directory
     configure_wal_archive()
     
-    # Step 5: Show PostgreSQL configuration
-    show_postgresql_config()
+    # Step 5: Configure PostgreSQL automatically
+    configure_postgresql()
     
     # Step 6: Create virtual environment
     create_virtual_environment()
