@@ -31,22 +31,24 @@ The easiest way to set up the backup system is using the interactive setup scrip
 git clone https://github.com/YOUR_USERNAME/alfresco-largecontentstore-backup.git
 cd alfresco-largecontentstore-backup
 
-# Run the setup wizard
-python3 setup.py
+# Run the setup wizard WITH SUDO (recommended for easy directory creation)
+sudo python3 setup.py
 ```
 
 The setup script will:
 - Check if all required tools are installed
 - Help you create the `.env` configuration file
-- Create all necessary backup directories (will prompt for sudo if needed)
-- Configure proper permissions for WAL archiving (will prompt for sudo)
+- Create all necessary backup directories (in `/mnt/backups` or similar)
+- Configure proper permissions for WAL archiving
 - Show PostgreSQL configuration instructions
 - Create a virtual environment and install dependencies
 - Verify the installation
 
 **Important:**
-- Run this as the same user that runs Alfresco (not root)
-- You will need sudo access for creating directories in `/mnt/backups` and setting PostgreSQL permissions
+- **Recommended:** Run with `sudo` to avoid permission issues creating directories
+- When run with sudo, all files will be owned by the actual user (not root)
+- The script detects who ran sudo and ensures proper ownership
+- You can also run without sudo, but may need to enter password multiple times
 - The script asks permission before each step and explains what it will do
 
 After setup completes, you'll need to configure PostgreSQL manually (the script provides exact instructions).

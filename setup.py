@@ -2,6 +2,8 @@
 """
 Interactive setup script for Alfresco Large Content Store Backup System.
 Run this script after cloning the repository to set up all required configurations.
+
+Can be run as regular user (will prompt for sudo when needed) or with sudo.
 """
 
 import os
@@ -9,7 +11,7 @@ import sys
 import subprocess
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 class Colors:
     HEADER = '\033[95m'
@@ -37,6 +39,30 @@ def print_warning(message: str):
 
 def print_error(message: str):
     print(f"{Colors.FAIL}✗ {message}{Colors.ENDC}")
+
+def get_real_user() -> Tuple[str, int, int]:
+    """
+    Get the real user (not root) even if script is run with sudo.
+    Returns: (username, uid, gid)
+    """
+    if os.geteuid() == 0:  # Running as root
+        # Get the user who ran sudo
+        sudo_user = os.environ.get('SUDO_USER')
+        if sudo_user:
+            # Get UID and GID of the real user
+            import pwd
+            try:
+                pw_record = pwd.getpwnam(sudo_user)
+                return (sudo_user, pw_record.pw_uid, pw_record.pw_gid)
+            except KeyError:
+                pass
+    
+    # Not running as root, or couldn't find SUDO_USER
+    return (os.environ.get('USER', 'unknown'), os.getuid(), os.getgid())
+
+def is_running_as_root() -> bool:
+    """Check if script is running as root/sudo."""
+    return os.geteuid() == 0
 
 def ask_yes_no(question: str, default: bool = True) -> bool:
     """Ask a yes/no question and return the answer."""
@@ -180,6 +206,11 @@ ALERT_FROM={alert_from}
     with open(env_file, 'w') as f:
         f.write(env_content)
     
+    # Set ownership if running as root
+    if is_running_as_root():
+        real_user, real_uid, real_gid = get_real_user()
+        os.chown(env_file, real_uid, real_gid)
+    
     os.chmod(env_file, 0o600)  # Secure the file
     
     print_success(f"\n.env file created at: {env_file.absolute()}")
@@ -215,61 +246,58 @@ def create_directories():
         print_error("BACKUP_DIR not found in .env file")
         return False
     
+    real_user, real_uid, real_gid = get_real_user()
+    running_as_root = is_running_as_root()
+    
     print_info(f"This will create the following directory structure:")
     print_info(f"  {backup_dir}/")
     print_info(f"  ├── postgres/")
     print_info(f"  ├── contentstore/")
     print_info(f"  └── pg_wal/")
-    print_info(f"\nAll directories will be owned by the current user: {os.getenv('USER')}")
+    print_info(f"\nAll directories will be owned by: {real_user}")
+    
+    if running_as_root:
+        print_info("(Running with sudo privileges)")
     
     if not ask_yes_no("\nCreate backup directories?"):
         print_warning("Skipping directory creation")
         return False
     
     try:
-        # Try to create main backup directory
-        Path(backup_dir).mkdir(parents=True, exist_ok=True)
-        print_success(f"Created: {backup_dir}")
-        
-    except PermissionError:
-        # Need sudo to create parent directories
-        print_warning(f"Permission denied creating {backup_dir}")
-        print_info(f"\nNeed sudo access to create directory in {Path(backup_dir).parent}")
-        
-        if ask_yes_no("Run with sudo to create directories?"):
-            current_user = os.getenv('USER')
-            print_info(f"\nRunning: sudo mkdir -p {backup_dir}")
-            result = run_command(['sudo', 'mkdir', '-p', backup_dir], check=False)
-            
-            if result is not None:
-                print_error("Failed to create directory with sudo")
-                return False
-            
+        # Create main backup directory
+        if running_as_root:
+            # We have root privileges, create directly
+            Path(backup_dir).mkdir(parents=True, exist_ok=True)
             print_success(f"Created: {backup_dir}")
             
-            print_info(f"Running: sudo chown -R {current_user}:{current_user} {backup_dir}")
-            result = run_command(['sudo', 'chown', '-R', f'{current_user}:{current_user}', backup_dir], check=False)
-            
-            if result is not None:
-                print_error("Failed to set ownership")
-                return False
-            
-            print_success(f"Set ownership to {current_user}")
+            # Set ownership to real user
+            os.chown(backup_dir, real_uid, real_gid)
+            print_success(f"Set ownership to {real_user}")
         else:
-            print_error("Cannot proceed without creating backup directory")
-            return False
-    
-    # Create subdirectories
-    try:
+            # Try to create without sudo first
+            try:
+                Path(backup_dir).mkdir(parents=True, exist_ok=True)
+                print_success(f"Created: {backup_dir}")
+            except PermissionError:
+                # Need sudo to create parent directories
+                print_warning(f"Permission denied creating {backup_dir}")
+                print_info(f"\nNeed sudo access to create directory in {Path(backup_dir).parent}")
+                print_info("Please re-run this script with sudo:")
+                print_info(f"  sudo python3 setup.py")
+                return False
+        
+        # Create subdirectories
         for subdir in ['postgres', 'contentstore', 'pg_wal']:
             path = Path(backup_dir) / subdir
             path.mkdir(exist_ok=True)
+            if running_as_root:
+                os.chown(path, real_uid, real_gid)
             print_success(f"Created: {path}")
         
         return True
         
     except Exception as e:
-        print_error(f"Error creating subdirectories: {e}")
+        print_error(f"Error creating directories: {e}")
         return False
 
 def get_postgres_user() -> Optional[str]:
@@ -307,7 +335,8 @@ def configure_wal_archive():
     
     # Detect PostgreSQL user
     pg_user = get_postgres_user()
-    current_user = os.getenv('USER')
+    real_user, real_uid, real_gid = get_real_user()
+    running_as_root = is_running_as_root()
     
     if not pg_user:
         print_warning("\nCould not detect PostgreSQL system user (tried: postgres, postgresql, pgsql)")
@@ -327,21 +356,24 @@ def configure_wal_archive():
                 print_error(f"User '{custom_user}' does not exist on this system")
                 print_warning("Skipping WAL directory configuration")
                 print_info("\nYou will need to configure this manually:")
-                print_info(f"  sudo chown <postgres_user>:{current_user} {wal_dir}")
+                print_info(f"  sudo chown <postgres_user>:{real_user} {wal_dir}")
                 print_info(f"  sudo chmod 770 {wal_dir}")
                 return False
         else:
             print_warning("Skipping WAL directory configuration")
             print_info("\nYou will need to configure this manually:")
-            print_info(f"  sudo chown <postgres_user>:{current_user} {wal_dir}")
+            print_info(f"  sudo chown <postgres_user>:{real_user} {wal_dir}")
             print_info(f"  sudo chmod 770 {wal_dir}")
             return False
     
     print_info(f"\nDetected PostgreSQL user: {pg_user}")
     print_info(f"\nThis will:")
-    print_info(f"  1. Set ownership to {pg_user}:{current_user}")
+    print_info(f"  1. Set ownership to {pg_user}:{real_user}")
     print_info(f"  2. Set permissions to 770 (rwxrwx---)")
-    print_info(f"  3. Allow both PostgreSQL and {current_user} to access the directory")
+    print_info(f"  3. Allow both PostgreSQL and {real_user} to access the directory")
+    
+    if running_as_root:
+        print_info("(Running with sudo privileges)")
     
     if not ask_yes_no("\nConfigure WAL directory permissions?"):
         print_warning("Skipping WAL directory configuration")
@@ -349,29 +381,50 @@ def configure_wal_archive():
         return False
     
     try:
-        # Change ownership
-        print_info(f"\nRunning: sudo chown {pg_user}:{current_user} {wal_dir}")
-        result = run_command(['sudo', 'chown', f'{pg_user}:{current_user}', str(wal_dir)], capture_output=True, check=False)
-        
-        if result and result.returncode == 0:
-            print_success(f"Set ownership to {pg_user}:{current_user}")
-        else:
-            print_error(f"Failed to set ownership")
-            if result and result.stderr:
-                print_error(f"Error: {result.stderr.strip()}")
+        # Get postgres user UID
+        import pwd
+        try:
+            pg_pw_record = pwd.getpwnam(pg_user)
+            pg_uid = pg_pw_record.pw_uid
+        except KeyError:
+            print_error(f"Could not find UID for user: {pg_user}")
             return False
+        
+        # Change ownership
+        if running_as_root:
+            # We already have root, use os.chown directly
+            print_info(f"\nSetting ownership to {pg_user}:{real_user}")
+            os.chown(wal_dir, pg_uid, real_gid)
+            print_success(f"Set ownership to {pg_user}:{real_user}")
+        else:
+            # Need sudo
+            print_info(f"\nRunning: sudo chown {pg_user}:{real_user} {wal_dir}")
+            result = run_command(['sudo', 'chown', f'{pg_user}:{real_user}', str(wal_dir)], capture_output=True, check=False)
+            
+            if result and result.returncode == 0:
+                print_success(f"Set ownership to {pg_user}:{real_user}")
+            else:
+                print_error(f"Failed to set ownership")
+                if result and result.stderr:
+                    print_error(f"Error: {result.stderr.strip()}")
+                return False
         
         # Change permissions
-        print_info(f"Running: sudo chmod 770 {wal_dir}")
-        result = run_command(['sudo', 'chmod', '770', str(wal_dir)], capture_output=True, check=False)
-        
-        if result and result.returncode == 0:
+        if running_as_root:
+            print_info("Setting permissions to 770")
+            os.chmod(wal_dir, 0o770)
             print_success("Set permissions to 770")
         else:
-            print_error("Failed to set permissions")
-            if result and result.stderr:
-                print_error(f"Error: {result.stderr.strip()}")
-            return False
+            print_info(f"Running: sudo chmod 770 {wal_dir}")
+            result = run_command(['sudo', 'chmod', '770', str(wal_dir)], capture_output=True, check=False)
+            
+            if result and result.returncode == 0:
+                print_success("Set permissions to 770")
+            else:
+                print_error("Failed to set permissions")
+                if result and result.stderr:
+                    print_error(f"Error: {result.stderr.strip()}")
+                return False
         
         return True
         
@@ -452,9 +505,12 @@ def create_virtual_environment():
     print_header("Step 6: Create Virtual Environment")
     
     venv_path = Path('venv')
+    real_user, real_uid, real_gid = get_real_user()
+    running_as_root = is_running_as_root()
     
     print_info("Creating a Python virtual environment isolates dependencies.")
     print_info(f"Virtual environment will be created at: {venv_path.absolute()}")
+    print_info(f"Virtual environment will be owned by: {real_user}")
     
     if venv_path.exists():
         print_warning(f"Virtual environment already exists at: {venv_path}")
@@ -471,7 +527,14 @@ def create_virtual_environment():
     try:
         # Create venv
         print_info("\nCreating virtual environment...")
-        result = run_command([sys.executable, '-m', 'venv', 'venv'])
+        
+        if running_as_root:
+            # Run as the real user using sudo -u
+            print_info(f"Running as user {real_user} (not root)")
+            result = run_command(['sudo', '-u', real_user, sys.executable, '-m', 'venv', 'venv'], check=True)
+        else:
+            result = run_command([sys.executable, '-m', 'venv', 'venv'], check=True)
+        
         if result is None:
             print_success("Virtual environment created")
         else:
@@ -482,7 +545,13 @@ def create_virtual_environment():
         
         # Install dependencies
         print_info("\nInstalling dependencies from requirements.txt...")
-        result = run_command([str(pip_path), 'install', '-r', 'requirements.txt'])
+        
+        if running_as_root:
+            # Run pip as the real user
+            result = run_command(['sudo', '-u', real_user, str(pip_path), 'install', '-r', 'requirements.txt'], check=True)
+        else:
+            result = run_command([str(pip_path), 'install', '-r', 'requirements.txt'], check=True)
+        
         if result is None:
             print_success("Dependencies installed")
         else:
@@ -560,7 +629,17 @@ def main():
     """Main setup flow."""
     print_header("Alfresco Large Content Store Backup - Setup Wizard")
     
-    print_info("This wizard will guide you through setting up the backup system.")
+    real_user, real_uid, real_gid = get_real_user()
+    running_as_root = is_running_as_root()
+    
+    if running_as_root:
+        print_info(f"Running with sudo privileges (real user: {real_user})")
+        print_info("All files and directories will be owned by the real user.")
+    else:
+        print_info(f"Running as user: {real_user}")
+        print_info("You may be prompted for sudo password when creating directories.")
+    
+    print_info("\nThis wizard will guide you through setting up the backup system.")
     print_info("You will be asked for permission before each step.\n")
     
     if not ask_yes_no("Start setup?"):
