@@ -715,6 +715,41 @@ def configure_postgresql():
         print_info(f"     psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
         return True
 
+def fix_alfresco_script(alfresco_script: Path) -> bool:
+    """Fix common syntax issues in alfresco.sh script."""
+    try:
+        with open(alfresco_script, 'r') as f:
+            content = f.read()
+        
+        # Check for common syntax issues
+        if '[: !=:' in content or '[:!=' in content:
+            print_info("Fixing shell syntax issues in alfresco.sh...")
+            
+            # Fix the common syntax error: [: !=: should be [ != ]
+            content = content.replace('[: !=:', '[ != ]')
+            content = content.replace('[:!=', '[ != ]')
+            
+            # Create backup
+            backup_path = Path(str(alfresco_script) + '.backup')
+            if not backup_path.exists():
+                with open(backup_path, 'w') as f:
+                    f.write(content)
+                print_success(f"Created backup: {backup_path}")
+            
+            # Write fixed version
+            with open(alfresco_script, 'w') as f:
+                f.write(content)
+            
+            print_success("Fixed alfresco.sh syntax issues")
+            return True
+        else:
+            print_info("No syntax issues detected in alfresco.sh")
+            return True
+            
+    except Exception as e:
+        print_warning(f"Could not fix alfresco.sh: {e}")
+        return False
+
 def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bool:
     """Restart Alfresco and grant replication privileges."""
     print_info("\n" + "="*60)
@@ -728,6 +763,11 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
         return False
     
     print_info(f"Alfresco control script: {alfresco_script}")
+    
+    # Try to fix common script issues
+    print_info("Checking alfresco.sh for syntax issues...")
+    fix_alfresco_script(alfresco_script)
+    
     print_warning("\nNote: Alfresco restart can be unpredictable:")
     print_warning("  - May take a long time or appear to hang")
     print_warning("  - Stop command may need Ctrl+C")
@@ -735,8 +775,8 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     
     if not ask_yes_no("\nAttempt automatic Alfresco restart?", default=True):
         print_info("\nManual restart required:")
-        print_info(f"  {alf_base_dir}/alfresco.sh stop")
-        print_info(f"  {alf_base_dir}/alfresco.sh start")
+        print_info(f"  bash {alf_base_dir}/alfresco.sh stop")
+        print_info(f"  bash {alf_base_dir}/alfresco.sh start")
         print_info("\nAfter restarting, grant replication privilege:")
         print_info(f"  psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
         print_warning("\nSetup will continue, but you must restart Alfresco manually")
