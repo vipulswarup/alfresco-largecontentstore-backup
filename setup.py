@@ -697,13 +697,20 @@ def configure_postgresql():
     print_warning("⚠ The replication privilege must be granted after restart")
     
     if ask_yes_no("\nWould you like to restart Alfresco and grant replication privileges automatically?"):
-        return restart_alfresco_and_grant_privileges(alf_base_dir, pg_user)
+        restart_success = restart_alfresco_and_grant_privileges(alf_base_dir, pg_user)
+        if not restart_success:
+            print_warning("\n⚠ Automatic restart failed - manual restart required")
+            print_info("\nManual steps:")
+            print_info(f"  1. Restart Alfresco: bash {alf_base_dir}/alfresco.sh stop && bash {alf_base_dir}/alfresco.sh start")
+            print_info(f"  2. Grant privilege: psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+        # Return True anyway - PostgreSQL is configured, just needs manual restart
+        return True
     else:
         print_info("\nManual steps required:")
         print_info("  1. Stop Alfresco:")
-        print_info(f"     {alf_base_dir}/alfresco.sh stop")
+        print_info(f"     bash {alf_base_dir}/alfresco.sh stop")
         print_info("  2. Start Alfresco:")
-        print_info(f"     {alf_base_dir}/alfresco.sh start")
+        print_info(f"     bash {alf_base_dir}/alfresco.sh start")
         print_info("  3. Grant replication privilege:")
         print_info(f"     psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
         return True
@@ -720,40 +727,86 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
         print_error(f"Alfresco control script not found: {alfresco_script}")
         return False
     
-    print_info(f"Stopping Alfresco using: {alfresco_script}")
-    print_warning("Note: Alfresco stop may take a while or appear to hang.")
-    print_warning("If it gets stuck, you may need to press Ctrl+C and try again.")
+    print_info(f"Alfresco control script: {alfresco_script}")
+    print_warning("\nNote: Alfresco restart can be unpredictable:")
+    print_warning("  - May take a long time or appear to hang")
+    print_warning("  - Stop command may need Ctrl+C")
+    print_warning("  - Script may have shell compatibility issues")
     
-    if not ask_yes_no("\nProceed with stopping Alfresco?"):
-        print_warning("Skipping Alfresco restart")
+    if not ask_yes_no("\nAttempt automatic Alfresco restart?", default=False):
+        print_info("\nManual restart required:")
+        print_info(f"  {alf_base_dir}/alfresco.sh stop")
+        print_info(f"  {alf_base_dir}/alfresco.sh start")
+        print_info("\nAfter restarting, grant replication privilege:")
+        print_info(f"  psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+        print_warning("\nSetup will continue, but you must restart Alfresco manually")
         return False
+    
+    import time
+    
+    # Try with bash explicitly to avoid shell compatibility issues
+    stop_commands = [
+        ['bash', str(alfresco_script), 'stop'],
+        [str(alfresco_script), 'stop'],
+    ]
+    
+    start_commands = [
+        ['bash', str(alfresco_script), 'start'],
+        [str(alfresco_script), 'start'],
+    ]
     
     # Stop Alfresco
     print_info("\nStopping Alfresco...")
-    result = run_command([str(alfresco_script), 'stop'], capture_output=True, check=False)
+    stop_success = False
+    for i, cmd in enumerate(stop_commands, 1):
+        if i > 1:
+            print_info(f"Trying alternative method {i}...")
+        
+        result = run_command(cmd, capture_output=True, check=False)
+        
+        if result and result.returncode == 0:
+            print_success("Alfresco stopped successfully")
+            stop_success = True
+            break
+        elif result:
+            print_warning(f"Stop attempt {i} returned exit code {result.returncode}")
+            if result.stderr:
+                print_warning(f"Error: {result.stderr.strip()}")
     
-    if result and result.returncode != 0:
-        print_warning(f"Alfresco stop command returned exit code {result.returncode}")
-        if result.stderr:
-            print_warning(f"Error output: {result.stderr.strip()}")
-        print_warning("This is normal - Alfresco stop often returns non-zero exit codes")
+    if not stop_success:
+        print_warning("Automatic stop failed - you may need to stop manually")
     
-    # Wait a moment for processes to stop
+    # Wait for processes to stop
     print_info("Waiting for processes to stop...")
-    import time
     time.sleep(5)
     
     # Start Alfresco
     print_info("\nStarting Alfresco...")
-    result = run_command([str(alfresco_script), 'start'], capture_output=True, check=False)
+    start_success = False
+    for i, cmd in enumerate(start_commands, 1):
+        if i > 1:
+            print_info(f"Trying alternative method {i}...")
+        
+        result = run_command(cmd, capture_output=True, check=False)
+        
+        if result and result.returncode == 0:
+            print_success("Alfresco started successfully")
+            start_success = True
+            break
+        elif result:
+            print_warning(f"Start attempt {i} returned exit code {result.returncode}")
+            if result.stderr:
+                print_warning(f"Error: {result.stderr.strip()}")
     
-    if result and result.returncode != 0:
-        print_error(f"Alfresco start failed with exit code {result.returncode}")
-        if result.stderr:
-            print_error(f"Error: {result.stderr.strip()}")
+    if not start_success:
+        print_error("Automatic Alfresco start failed")
+        print_info("\nPlease restart Alfresco manually:")
+        print_info(f"  bash {alf_base_dir}/alfresco.sh stop")
+        print_info(f"  bash {alf_base_dir}/alfresco.sh start")
+        print_warning("\nContinuing setup without replication privilege grant...")
         return False
     
-    print_success("Alfresco started successfully")
+    print_success("Alfresco restarted successfully")
     
     # Wait for PostgreSQL to be ready
     print_info("Waiting for PostgreSQL to be ready...")
