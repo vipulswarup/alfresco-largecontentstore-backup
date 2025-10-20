@@ -784,23 +784,62 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     
     import time
     
-    # Try with bash explicitly to avoid shell compatibility issues
+    # Debug: Check script permissions and content
+    print_info("\nDebugging alfresco.sh script...")
+    
+    # Check if script is executable
+    if os.access(alfresco_script, os.X_OK):
+        print_success("Script is executable")
+    else:
+        print_warning("Script is not executable - fixing...")
+        os.chmod(alfresco_script, 0o755)
+    
+    # Check first few lines of script
+    try:
+        with open(alfresco_script, 'r') as f:
+            lines = f.readlines()[:10]
+        print_info("First 10 lines of alfresco.sh:")
+        for i, line in enumerate(lines, 1):
+            print_info(f"  {i}: {line.rstrip()}")
+    except Exception as e:
+        print_warning(f"Could not read script: {e}")
+    
+    # Test script with different execution methods
+    test_commands = [
+        ['bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} --help'],
+        ['bash', '-c', f'cd {alf_base_dir} && {alfresco_script} --help'],
+        ['bash', str(alfresco_script), '--help'],
+    ]
+    
+    print_info("\nTesting script execution methods...")
+    for i, cmd in enumerate(test_commands, 1):
+        print_info(f"Test {i}: {' '.join(cmd[:3])}...")
+        result = run_command(cmd, capture_output=True, check=False)
+        if result:
+            print_info(f"  Exit code: {result.returncode}")
+            if result.stdout:
+                print_info(f"  Output: {result.stdout.strip()[:100]}...")
+            if result.stderr:
+                print_info(f"  Error: {result.stderr.strip()[:100]}...")
+    
+    # Try with bash explicitly and proper working directory
     stop_commands = [
+        ['bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} stop'],
+        ['bash', '-c', f'cd {alf_base_dir} && {alfresco_script} stop'],
         ['bash', str(alfresco_script), 'stop'],
-        [str(alfresco_script), 'stop'],
     ]
     
     start_commands = [
+        ['bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} start'],
+        ['bash', '-c', f'cd {alf_base_dir} && {alfresco_script} start'],
         ['bash', str(alfresco_script), 'start'],
-        [str(alfresco_script), 'start'],
     ]
     
     # Stop Alfresco
     print_info("\nStopping Alfresco...")
     stop_success = False
     for i, cmd in enumerate(stop_commands, 1):
-        if i > 1:
-            print_info(f"Trying alternative method {i}...")
+        print_info(f"Stop method {i}: {' '.join(cmd[:3])}...")
         
         result = run_command(cmd, capture_output=True, check=False)
         
@@ -810,8 +849,10 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
             break
         elif result:
             print_warning(f"Stop attempt {i} returned exit code {result.returncode}")
+            if result.stdout:
+                print_info(f"  Output: {result.stdout.strip()}")
             if result.stderr:
-                print_warning(f"Error: {result.stderr.strip()}")
+                print_warning(f"  Error: {result.stderr.strip()}")
     
     if not stop_success:
         print_warning("Automatic stop failed - you may need to stop manually")
@@ -824,8 +865,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     print_info("\nStarting Alfresco...")
     start_success = False
     for i, cmd in enumerate(start_commands, 1):
-        if i > 1:
-            print_info(f"Trying alternative method {i}...")
+        print_info(f"Start method {i}: {' '.join(cmd[:3])}...")
         
         result = run_command(cmd, capture_output=True, check=False)
         
@@ -835,12 +875,15 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
             break
         elif result:
             print_warning(f"Start attempt {i} returned exit code {result.returncode}")
+            if result.stdout:
+                print_info(f"  Output: {result.stdout.strip()}")
             if result.stderr:
-                print_warning(f"Error: {result.stderr.strip()}")
+                print_warning(f"  Error: {result.stderr.strip()}")
     
     if not start_success:
         print_error("Automatic Alfresco start failed")
         print_info("\nPlease restart Alfresco manually:")
+        print_info(f"  cd {alf_base_dir}")
         print_info(f"  bash {alf_base_dir}/alfresco.sh stop")
         print_info(f"  bash {alf_base_dir}/alfresco.sh start")
         print_warning("\nContinuing setup without replication privilege grant...")
