@@ -721,19 +721,26 @@ def fix_alfresco_script(alfresco_script: Path) -> bool:
         with open(alfresco_script, 'r') as f:
             content = f.read()
         
-        # Check for common syntax issues
-        if '[: !=:' in content or '[:!=' in content:
-            print_info("Fixing shell syntax issues in alfresco.sh...")
-            
-            # Fix the common syntax error: [: !=: should be [ != ]
+        original_content = content
+        fixed = False
+        
+        # Fix the common syntax error: [: !=: should be [ != ]
+        if '[: !=:' in content:
+            print_info("Fixing syntax error: [: !=: -> [ != ]")
             content = content.replace('[: !=:', '[ != ]')
+            fixed = True
+        
+        if '[:!=' in content:
+            print_info("Fixing syntax error: [:!= -> [ != ]")
             content = content.replace('[:!=', '[ != ]')
-            
+            fixed = True
+        
+        if fixed:
             # Create backup
             backup_path = Path(str(alfresco_script) + '.backup')
             if not backup_path.exists():
                 with open(backup_path, 'w') as f:
-                    f.write(content)
+                    f.write(original_content)
                 print_success(f"Created backup: {backup_path}")
             
             # Write fixed version
@@ -822,17 +829,21 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
             if result.stderr:
                 print_info(f"  Error: {result.stderr.strip()[:100]}...")
     
-    # Try with bash explicitly and proper working directory
+    # Try with bash explicitly, proper working directory, and as the correct user
+    real_user, real_uid, real_gid = get_real_user()
+    
     stop_commands = [
+        ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} stop'],
+        ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && {alfresco_script} stop'],
         ['bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} stop'],
         ['bash', '-c', f'cd {alf_base_dir} && {alfresco_script} stop'],
-        ['bash', str(alfresco_script), 'stop'],
     ]
     
     start_commands = [
+        ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} start'],
+        ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && {alfresco_script} start'],
         ['bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} start'],
         ['bash', '-c', f'cd {alf_base_dir} && {alfresco_script} start'],
-        ['bash', str(alfresco_script), 'start'],
     ]
     
     # Stop Alfresco
