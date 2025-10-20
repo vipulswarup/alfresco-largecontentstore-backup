@@ -1,9 +1,8 @@
 """Contentstore backup using rsync with hardlink optimization."""
 
-import subprocess
-import time
 from datetime import datetime
 from pathlib import Path
+from subprocess_utils import SubprocessRunner, validate_path
 
 
 def backup_contentstore(config):
@@ -30,6 +29,14 @@ def backup_contentstore(config):
         'start_time': start_time.isoformat()
     }
     
+    # Validate paths
+    try:
+        source = validate_path(source, must_exist=True)
+        destination = validate_path(destination, must_exist=False)
+    except ValueError as e:
+        result['error'] = f"Invalid path: {e}"
+        return result
+    
     # Build rsync command
     cmd = [
         'rsync',
@@ -44,39 +51,24 @@ def backup_contentstore(config):
     # Ensure source path has trailing slash
     cmd.extend([f'{source}/', f'{destination}/'])
     
-    try:
-        start = time.time()
-        process = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=28800  # 8 hour timeout for large contentstore
-        )
-        duration = time.time() - start
-        
-        if process.returncode != 0:
-            result['error'] = f"rsync failed with exit code {process.returncode}\n"
-            result['error'] += f"STDOUT: {process.stdout}\n"
-            result['error'] += f"STDERR: {process.stderr}"
-        else:
-            # Update the 'last' symlink to point to current backup
-            try:
-                if last_link.exists() or last_link.is_symlink():
-                    last_link.unlink()
-                last_link.symlink_to(destination)
-            except Exception as e:
-                # Don't fail the whole backup if symlink update fails
-                result['error'] = f"Warning: Could not update 'last' symlink: {str(e)}"
-            
-            result['success'] = True
-            result['duration'] = duration
+    # Use common subprocess runner
+    runner = SubprocessRunner(timeout=28800)  # 8 hour timeout for large contentstore
+    subprocess_result = runner.run_command(cmd)
     
-    except subprocess.TimeoutExpired:
-        result['error'] = "rsync timed out after 8 hours"
-    except FileNotFoundError:
-        result['error'] = "rsync command not found. Ensure rsync is installed."
-    except Exception as e:
-        result['error'] = f"Unexpected error during contentstore backup: {str(e)}"
+    if subprocess_result['success']:
+        # Update the 'last' symlink to point to current backup
+        try:
+            if last_link.exists() or last_link.is_symlink():
+                last_link.unlink()
+            last_link.symlink_to(destination)
+        except Exception as e:
+            # Don't fail the whole backup if symlink update fails
+            result['error'] = f"Warning: Could not update 'last' symlink: {str(e)}"
+        
+        result['success'] = True
+        result['duration'] = subprocess_result['duration']
+    else:
+        result['error'] = subprocess_result['error']
     
     return result
 

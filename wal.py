@@ -1,7 +1,7 @@
 """WAL archive monitoring."""
 
-import subprocess
 from pathlib import Path
+from subprocess_utils import SubprocessRunner, validate_path
 
 
 def check_wal_archive(config):
@@ -20,28 +20,29 @@ def check_wal_archive(config):
         'latest_files': []
     }
     
+    # Validate WAL directory
+    try:
+        wal_dir = validate_path(wal_dir, must_exist=True)
+    except ValueError as e:
+        result['error'] = f"Invalid WAL directory: {e}"
+        return result
+    
     try:
         # List WAL files
         cmd = ['ls', '-lht', str(wal_dir)]
-        process = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        runner = SubprocessRunner(timeout=30)
+        subprocess_result = runner.run_command(cmd)
         
-        if process.returncode != 0:
-            result['error'] = f"Failed to list WAL directory: {process.stderr}"
-        else:
-            lines = process.stdout.strip().split('\n')
+        if subprocess_result['success']:
+            lines = subprocess_result['stdout'].strip().split('\n')
             # Skip first line (total) and get up to 20 most recent
             file_lines = [line for line in lines[1:21] if line.strip()]
             result['latest_files'] = file_lines
             result['wal_count'] = len(list(wal_dir.iterdir()))
             result['success'] = True
+        else:
+            result['error'] = subprocess_result['error']
     
-    except subprocess.TimeoutExpired:
-        result['error'] = "WAL directory listing timed out"
     except Exception as e:
         result['error'] = f"Error checking WAL archive: {str(e)}"
     

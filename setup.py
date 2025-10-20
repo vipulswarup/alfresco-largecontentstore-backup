@@ -828,9 +828,18 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     print_info("Note: This requires superuser access to PostgreSQL")
     
     # Grant replication privileges using the embedded PostgreSQL approach
-    print_section("GRANTING REPLICATION PRIVILEGES")
+    print_header("GRANTING REPLICATION PRIVILEGES")
     
     real_user, real_uid, real_gid = get_real_user()
+    
+    # Pre-check: Skip if replication already granted
+    psql_bin = Path(alf_base_dir) / "postgresql" / "bin" / "psql"
+    if psql_bin.exists():
+        check_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', 'postgres', '-d', 'postgres', '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
+        result = run_command(check_cmd, capture_output=True, check=False)
+        if result and result.returncode == 0 and 't' in result.stdout:
+            print_success(f"User {pg_user} already has replication privileges")
+            return True
     pg_data_dir = Path(alf_base_dir) / "alf_data" / "postgresql"
     pg_hba_conf = pg_data_dir / "pg_hba.conf"
     pg_ctl_script = Path(alf_base_dir) / "postgresql" / "scripts" / "ctl.sh"
@@ -910,15 +919,14 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     
     # Step 5: Verify privileges
     print_info("5. Verifying privileges...")
-    verify_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', 'postgres', '-d', 'postgres', '-c', '\\du']
+    verify_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', 'postgres', '-d', 'postgres', '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
     
     result = run_command(verify_cmd, capture_output=True, check=False)
     if result and result.returncode == 0:
-        print_success("Privileges verified")
-        if 'Replication' in result.stdout or 'Superuser' in result.stdout:
-            print_info("User has appropriate privileges")
+        if 't' in result.stdout:
+            print_success("Replication privilege verified")
         else:
-            print_warning("User privileges may not be set correctly")
+            print_warning("Replication privilege not found")
     else:
         print_warning("Could not verify privileges")
     
@@ -929,9 +937,10 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
         with open(pg_hba_conf, 'r') as f:
             lines = f.readlines()
         
-        # Remove the first line (trust line we added)
-        if lines and lines[0].strip() == "local   all             all                                     trust":
-            lines = lines[1:]
+        # Remove the exact trust line we added
+        trust_line = "local   all             all                                     trust\n"
+        if trust_line in lines:
+            lines.remove(trust_line)
         
         with open(pg_hba_conf, 'w') as f:
             f.writelines(lines)
@@ -953,7 +962,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     
     # Step 8: Final verification
     print_info("8. Final verification...")
-    final_verify = ['psql', '-h', 'localhost', '-U', pg_user, '-d', 'postgres', '-c', '\\du']
+    final_verify = ['sudo', '-u', real_user, str(psql_bin), '-U', pg_user, '-d', 'postgres', '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
     
     result = run_command(final_verify, capture_output=True, check=False)
     if result and result.returncode == 0:

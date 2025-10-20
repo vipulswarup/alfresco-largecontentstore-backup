@@ -1,9 +1,9 @@
 """PostgreSQL backup using pg_basebackup."""
 
-import subprocess
-import time
+import os
 from datetime import datetime
 from pathlib import Path
+from subprocess_utils import SubprocessRunner, validate_path
 
 
 def backup_postgres(config):
@@ -28,10 +28,17 @@ def backup_postgres(config):
         'start_time': start_time.isoformat()
     }
     
+    # Validate backup path
+    try:
+        backup_path = validate_path(backup_path, must_exist=False)
+    except ValueError as e:
+        result['error'] = f"Invalid backup path: {e}"
+        return result
+    
     # Set PGPASSWORD for pg_basebackup
     env = {
         'PGPASSWORD': config.pgpassword,
-        'PATH': subprocess.os.environ.get('PATH', '')
+        'PATH': os.environ.get('PATH', '')
     }
     
     cmd = [
@@ -45,31 +52,15 @@ def backup_postgres(config):
         '-P'    # progress reporting
     ]
     
-    try:
-        start = time.time()
-        process = subprocess.run(
-            cmd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=7200  # 2 hour timeout
-        )
-        duration = time.time() - start
-        
-        if process.returncode != 0:
-            result['error'] = f"pg_basebackup failed with exit code {process.returncode}\n"
-            result['error'] += f"STDOUT: {process.stdout}\n"
-            result['error'] += f"STDERR: {process.stderr}"
-        else:
-            result['success'] = True
-            result['duration'] = duration
+    # Use common subprocess runner
+    runner = SubprocessRunner(timeout=7200)  # 2 hour timeout
+    subprocess_result = runner.run_command(cmd, env=env)
     
-    except subprocess.TimeoutExpired:
-        result['error'] = "pg_basebackup timed out after 2 hours"
-    except FileNotFoundError:
-        result['error'] = "pg_basebackup command not found. Ensure PostgreSQL client tools are installed."
-    except Exception as e:
-        result['error'] = f"Unexpected error during PostgreSQL backup: {str(e)}"
+    if subprocess_result['success']:
+        result['success'] = True
+        result['duration'] = subprocess_result['duration']
+    else:
+        result['error'] = subprocess_result['error']
     
     return result
 
