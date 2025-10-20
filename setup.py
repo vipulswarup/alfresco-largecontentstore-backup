@@ -160,6 +160,13 @@ def create_env_file():
     pg_user = input(f"{Colors.OKCYAN}PostgreSQL user [alfresco]: {Colors.ENDC}").strip() or 'alfresco'
     pg_password = input(f"{Colors.OKCYAN}PostgreSQL password: {Colors.ENDC}").strip()
     
+    # Auto-detect PostgreSQL system user
+    pg_system_user = get_postgres_user()
+    if pg_system_user:
+        print_info(f"Auto-detected PostgreSQL system user: {pg_system_user}")
+    else:
+        pg_system_user = input(f"{Colors.OKCYAN}PostgreSQL system user [postgres]: {Colors.ENDC}").strip() or 'postgres'
+    
     print_info("\n--- Paths Configuration ---")
     backup_dir = input(f"{Colors.OKCYAN}Backup directory [/mnt/backups/alfresco]: {Colors.ENDC}").strip() or '/mnt/backups/alfresco'
     alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory [/opt/alfresco]: {Colors.ENDC}").strip() or '/opt/alfresco'
@@ -186,6 +193,9 @@ PGHOST={pg_host}
 PGPORT={pg_port}
 PGUSER={pg_user}
 PGPASSWORD={pg_password}
+
+# PostgreSQL System User (for embedded PostgreSQL)
+PG_SYSTEM_USER={pg_system_user}
 
 # Paths
 BACKUP_DIR={backup_dir}
@@ -302,15 +312,34 @@ def create_directories():
 
 def get_postgres_user() -> Optional[str]:
     """Detect or ask for the PostgreSQL system user."""
-    # Try common PostgreSQL user names
-    common_users = ['postgres', 'postgresql', 'pgsql']
+    # For Alfresco embedded PostgreSQL, try to detect the actual user
+    real_user, real_uid, real_gid = get_real_user()
+    
+    # Check if this is an Alfresco setup by looking for common patterns
+    try:
+        # Check if we're in an Alfresco directory structure
+        current_dir = Path.cwd()
+        if 'alfresco' in str(current_dir).lower():
+            print_info(f"Detected Alfresco environment, using user: {real_user}")
+            return real_user
+    except:
+        pass
+    
+    # Try common PostgreSQL users
+    common_users = ['postgres', 'postgresql', 'pgsql', real_user]
     
     for user in common_users:
-        result = run_command(['id', user], capture_output=True, check=False)
-        if result and result.returncode == 0:
-            return user
+        try:
+            result = run_command(['id', user], capture_output=True, check=False)
+            if result and result.returncode == 0:
+                print_info(f"Found PostgreSQL user: {user}")
+                return user
+        except:
+            continue
     
-    return None
+    # If we get here, use the real user as fallback for embedded PostgreSQL
+    print_info(f"Using detected user for embedded PostgreSQL: {real_user}")
+    return real_user
 
 def configure_wal_archive():
     """Help configure WAL archive directory for PostgreSQL."""
@@ -333,40 +362,21 @@ def configure_wal_archive():
     print_info("PostgreSQL needs write access to the WAL archive directory.")
     print_info(f"WAL directory: {wal_dir}")
     
-    # Detect PostgreSQL user
-    pg_user = get_postgres_user()
+    # Get PostgreSQL user from .env file or detect it
+    pg_user = config.get('PG_SYSTEM_USER')
     real_user, real_uid, real_gid = get_real_user()
     running_as_root = is_running_as_root()
     
     if not pg_user:
-        print_warning("\nCould not detect PostgreSQL system user (tried: postgres, postgresql, pgsql)")
-        print_info("This might mean:")
-        print_info("  - PostgreSQL is not installed on this system")
-        print_info("  - PostgreSQL uses a different username")
-        print_info("  - Alfresco uses an embedded PostgreSQL")
-        
-        custom_user = input(f"{Colors.OKCYAN}Enter PostgreSQL system user (or press Enter to skip): {Colors.ENDC}").strip()
-        
-        if custom_user:
-            # Verify the user exists
-            result = run_command(['id', custom_user], capture_output=True, check=False)
-            if result and result.returncode == 0:
-                pg_user = custom_user
-            else:
-                print_error(f"User '{custom_user}' does not exist on this system")
-                print_warning("Skipping WAL directory configuration")
-                print_info("\nYou will need to configure this manually:")
-                print_info(f"  sudo chown <postgres_user>:{real_user} {wal_dir}")
-                print_info(f"  sudo chmod 770 {wal_dir}")
-                return False
+        # Auto-detect if not in .env file
+        pg_user = get_postgres_user()
+        if pg_user:
+            print_info(f"Auto-detected PostgreSQL system user: {pg_user}")
         else:
-            print_warning("Skipping WAL directory configuration")
-            print_info("\nYou will need to configure this manually:")
-            print_info(f"  sudo chown <postgres_user>:{real_user} {wal_dir}")
-            print_info(f"  sudo chmod 770 {wal_dir}")
-            return False
-    
-    print_info(f"\nDetected PostgreSQL user: {pg_user}")
+            pg_user = real_user
+            print_info(f"Using current user as PostgreSQL system user: {pg_user}")
+    else:
+        print_info(f"Using PostgreSQL system user from .env: {pg_user}")
     print_info(f"\nThis will:")
     print_info(f"  1. Set ownership to {pg_user}:{real_user}")
     print_info(f"  2. Set permissions to 770 (rwxrwx---)")
@@ -715,47 +725,7 @@ def configure_postgresql():
         print_info(f"     psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
         return True
 
-def fix_alfresco_script(alfresco_script: Path) -> bool:
-    """Fix common syntax issues in alfresco.sh script."""
-    try:
-        with open(alfresco_script, 'r') as f:
-            content = f.read()
-        
-        original_content = content
-        fixed = False
-        
-        # Fix the common syntax error: [: !=: should be [ != ]
-        if '[: !=:' in content:
-            print_info("Fixing syntax error: [: !=: -> [ != ]")
-            content = content.replace('[: !=:', '[ != ]')
-            fixed = True
-        
-        if '[:!=' in content:
-            print_info("Fixing syntax error: [:!= -> [ != ]")
-            content = content.replace('[:!=', '[ != ]')
-            fixed = True
-        
-        if fixed:
-            # Create backup
-            backup_path = Path(str(alfresco_script) + '.backup')
-            if not backup_path.exists():
-                with open(backup_path, 'w') as f:
-                    f.write(original_content)
-                print_success(f"Created backup: {backup_path}")
-            
-            # Write fixed version
-            with open(alfresco_script, 'w') as f:
-                f.write(content)
-            
-            print_success("Fixed alfresco.sh syntax issues")
-            return True
-        else:
-            print_info("No syntax issues detected in alfresco.sh")
-            return True
-            
-    except Exception as e:
-        print_warning(f"Could not fix alfresco.sh: {e}")
-        return False
+
 
 def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bool:
     """Restart Alfresco and grant replication privileges."""
@@ -771,9 +741,6 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     
     print_info(f"Alfresco control script: {alfresco_script}")
     
-    # Try to fix common script issues
-    print_info("Checking alfresco.sh for syntax issues...")
-    fix_alfresco_script(alfresco_script)
     
     print_warning("\nNote: Alfresco restart can be unpredictable:")
     print_warning("  - May take a long time or appear to hang")
@@ -791,43 +758,6 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     
     import time
     
-    # Debug: Check script permissions and content
-    print_info("\nDebugging alfresco.sh script...")
-    
-    # Check if script is executable
-    if os.access(alfresco_script, os.X_OK):
-        print_success("Script is executable")
-    else:
-        print_warning("Script is not executable - fixing...")
-        os.chmod(alfresco_script, 0o755)
-    
-    # Check first few lines of script
-    try:
-        with open(alfresco_script, 'r') as f:
-            lines = f.readlines()[:10]
-        print_info("First 10 lines of alfresco.sh:")
-        for i, line in enumerate(lines, 1):
-            print_info(f"  {i}: {line.rstrip()}")
-    except Exception as e:
-        print_warning(f"Could not read script: {e}")
-    
-    # Test script with different execution methods
-    test_commands = [
-        ['bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} --help'],
-        ['bash', '-c', f'cd {alf_base_dir} && {alfresco_script} --help'],
-        ['bash', str(alfresco_script), '--help'],
-    ]
-    
-    print_info("\nTesting script execution methods...")
-    for i, cmd in enumerate(test_commands, 1):
-        print_info(f"Test {i}: {' '.join(cmd[:3])}...")
-        result = run_command(cmd, capture_output=True, check=False)
-        if result:
-            print_info(f"  Exit code: {result.returncode}")
-            if result.stdout:
-                print_info(f"  Output: {result.stdout.strip()[:100]}...")
-            if result.stderr:
-                print_info(f"  Error: {result.stderr.strip()[:100]}...")
     
     # Run as the correct user (evadm) only
     real_user, real_uid, real_gid = get_real_user()
