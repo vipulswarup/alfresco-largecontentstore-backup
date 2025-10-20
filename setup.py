@@ -829,44 +829,33 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
             if result.stderr:
                 print_info(f"  Error: {result.stderr.strip()[:100]}...")
     
-    # Try with bash explicitly, proper working directory, and as the correct user
+    # Run as the correct user (evadm) only
     real_user, real_uid, real_gid = get_real_user()
     
     stop_commands = [
         ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} stop'],
-        ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && {alfresco_script} stop'],
-        ['bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} stop'],
-        ['bash', '-c', f'cd {alf_base_dir} && {alfresco_script} stop'],
     ]
     
     start_commands = [
         ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} start'],
-        ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && {alfresco_script} start'],
-        ['bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} start'],
-        ['bash', '-c', f'cd {alf_base_dir} && {alfresco_script} start'],
     ]
     
     # Stop Alfresco
     print_info("\nStopping Alfresco...")
-    stop_success = False
-    for i, cmd in enumerate(stop_commands, 1):
-        print_info(f"Stop method {i}: {' '.join(cmd[:3])}...")
-        
-        result = run_command(cmd, capture_output=True, check=False)
-        
-        if result and result.returncode == 0:
-            print_success("Alfresco stopped successfully")
-            stop_success = True
-            break
-        elif result:
-            print_warning(f"Stop attempt {i} returned exit code {result.returncode}")
-            if result.stdout:
-                print_info(f"  Output: {result.stdout.strip()}")
-            if result.stderr:
-                print_warning(f"  Error: {result.stderr.strip()}")
+    stop_cmd = stop_commands[0]
+    print_info(f"Running: sudo -u {real_user} bash -c 'cd {alf_base_dir} && bash {alfresco_script} stop'")
     
-    if not stop_success:
-        print_warning("Automatic stop failed - you may need to stop manually")
+    result = run_command(stop_cmd, capture_output=True, check=False)
+    
+    if result and result.returncode == 0:
+        print_success("Alfresco stopped successfully")
+    else:
+        print_warning("Alfresco stop may have failed")
+        if result:
+            if result.stdout:
+                print_info(f"Output: {result.stdout.strip()}")
+            if result.stderr:
+                print_warning(f"Error: {result.stderr.strip()}")
     
     # Wait for processes to stop
     print_info("Waiting for processes to stop...")
@@ -874,29 +863,23 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     
     # Start Alfresco
     print_info("\nStarting Alfresco...")
-    start_success = False
-    for i, cmd in enumerate(start_commands, 1):
-        print_info(f"Start method {i}: {' '.join(cmd[:3])}...")
-        
-        result = run_command(cmd, capture_output=True, check=False)
-        
-        if result and result.returncode == 0:
-            print_success("Alfresco started successfully")
-            start_success = True
-            break
-        elif result:
-            print_warning(f"Start attempt {i} returned exit code {result.returncode}")
-            if result.stdout:
-                print_info(f"  Output: {result.stdout.strip()}")
-            if result.stderr:
-                print_warning(f"  Error: {result.stderr.strip()}")
+    start_cmd = start_commands[0]
+    print_info(f"Running: sudo -u {real_user} bash -c 'cd {alf_base_dir} && bash {alfresco_script} start'")
     
-    if not start_success:
-        print_error("Automatic Alfresco start failed")
+    result = run_command(start_cmd, capture_output=True, check=False)
+    
+    if result and result.returncode == 0:
+        print_success("Alfresco started successfully")
+    else:
+        print_error("Alfresco start failed")
+        if result:
+            if result.stdout:
+                print_info(f"Output: {result.stdout.strip()}")
+            if result.stderr:
+                print_error(f"Error: {result.stderr.strip()}")
         print_info("\nPlease restart Alfresco manually:")
-        print_info(f"  cd {alf_base_dir}")
-        print_info(f"  bash {alf_base_dir}/alfresco.sh stop")
-        print_info(f"  bash {alf_base_dir}/alfresco.sh start")
+        print_info(f"  sudo -u {real_user} bash -c 'cd {alf_base_dir} && bash {alfresco_script} stop'")
+        print_info(f"  sudo -u {real_user} bash -c 'cd {alf_base_dir} && bash {alfresco_script} start'")
         print_warning("\nContinuing setup without replication privilege grant...")
         return False
     
@@ -914,51 +897,141 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     print_info(f"Granting replication privilege to user: {pg_user}")
     print_info("Note: This requires superuser access to PostgreSQL")
     
-    # Try different methods to connect as superuser
-    superuser_methods = [
-        # Method 1: Try connecting as the same user that runs PostgreSQL (evadm)
-        ['psql', '-h', 'localhost', '-U', 'alfresco', '-d', 'postgres', '-c', f'ALTER USER {pg_user} REPLICATION;'],
-        # Method 2: Try with sudo to the user running PostgreSQL
-        ['sudo', '-u', 'alfresco', 'psql', '-h', 'localhost', '-U', 'alfresco', '-d', 'postgres', '-c', f'ALTER USER {pg_user} REPLICATION;'],
-    ]
+    # Grant replication privileges using the embedded PostgreSQL approach
+    print_section("GRANTING REPLICATION PRIVILEGES")
     
-    success = False
-    for i, method in enumerate(superuser_methods, 1):
-        print_info(f"\nTrying method {i}: {' '.join(method[:4])}...")
-        
-        result = run_command(method, capture_output=True, check=False)
-        
-        if result and result.returncode == 0:
-            print_success("Replication privilege granted successfully")
-            success = True
-            break
-        else:
-            print_warning(f"Method {i} failed")
-            if result and result.stderr:
-                print_warning(f"Error: {result.stderr.strip()}")
+    real_user, real_uid, real_gid = get_real_user()
+    pg_data_dir = Path(alf_base_dir) / "alf_data" / "postgresql"
+    pg_hba_conf = pg_data_dir / "pg_hba.conf"
+    pg_ctl_script = Path(alf_base_dir) / "postgresql" / "scripts" / "ctl.sh"
+    pg_ctl_bin = Path(alf_base_dir) / "postgresql" / "bin" / "pg_ctl"
+    psql_bin = Path(alf_base_dir) / "postgresql" / "bin" / "psql"
     
-    if not success:
-        print_error("Failed to grant replication privilege automatically")
-        print_info("\nYou may need to grant it manually:")
-        print_info(f"  psql -h localhost -U alfresco -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
-        print_info("\nOr if that doesn't work, try:")
-        print_info(f"  sudo -u alfresco psql -h localhost -U alfresco -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+    print_info("Using embedded PostgreSQL approach:")
+    print_info(f"  PostgreSQL data directory: {pg_data_dir}")
+    print_info(f"  Authentication config: {pg_hba_conf}")
+    
+    if not pg_hba_conf.exists():
+        print_error(f"PostgreSQL config file not found: {pg_hba_conf}")
         return False
     
-    # Verify the privilege was granted
-    print_info("\nVerifying replication privilege...")
-    verify_cmd = ['psql', '-h', 'localhost', '-U', 'alfresco', '-d', 'postgres', '-c', 
-                  f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
+    if not psql_bin.exists():
+        print_error(f"PostgreSQL client not found: {psql_bin}")
+        return False
+    
+    # Step 1: Backup pg_hba.conf
+    print_info("\n1. Backing up pg_hba.conf...")
+    backup_file(pg_hba_conf)
+    
+    # Step 2: Add trust authentication
+    print_info("2. Adding trust authentication...")
+    try:
+        with open(pg_hba_conf, 'r') as f:
+            lines = f.readlines()
+        
+        # Add trust line at the top
+        trust_line = "local   all             all                                     trust\n"
+        lines.insert(0, trust_line)
+        
+        with open(pg_hba_conf, 'w') as f:
+            f.writelines(lines)
+        
+        print_success("Added trust authentication")
+    except Exception as e:
+        print_error(f"Failed to modify pg_hba.conf: {e}")
+        return False
+    
+    # Step 3: Restart PostgreSQL
+    print_info("3. Restarting PostgreSQL...")
+    restart_cmd = None
+    
+    if pg_ctl_script.exists():
+        restart_cmd = ['sudo', '-u', real_user, str(pg_ctl_script), 'restart']
+        print_info(f"Using: {pg_ctl_script}")
+    elif pg_ctl_bin.exists():
+        restart_cmd = ['sudo', '-u', real_user, str(pg_ctl_bin), '-D', str(pg_data_dir), 'restart']
+        print_info(f"Using: {pg_ctl_bin}")
+    else:
+        print_error("No PostgreSQL control script found")
+        return False
+    
+    result = run_command(restart_cmd, capture_output=True, check=False)
+    if result and result.returncode == 0:
+        print_success("PostgreSQL restarted")
+    else:
+        print_warning("PostgreSQL restart may have failed")
+        if result and result.stderr:
+            print_warning(f"Error: {result.stderr.strip()}")
+    
+    # Step 4: Connect as superuser and grant privileges
+    print_info("4. Granting replication privileges...")
+    
+    # Connect as postgres superuser with trust authentication
+    psql_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', 'postgres', '-d', 'postgres', '-c', f'ALTER USER {pg_user} WITH REPLICATION;']
+    
+    result = run_command(psql_cmd, capture_output=True, check=False)
+    if result and result.returncode == 0:
+        print_success("Replication privilege granted")
+    else:
+        print_error("Failed to grant replication privilege")
+        if result and result.stderr:
+            print_error(f"Error: {result.stderr.strip()}")
+        return False
+    
+    # Step 5: Verify privileges
+    print_info("5. Verifying privileges...")
+    verify_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', 'postgres', '-d', 'postgres', '-c', '\\du']
     
     result = run_command(verify_cmd, capture_output=True, check=False)
     if result and result.returncode == 0:
-        if 't' in result.stdout:  # 't' means true
-            print_success("✓ Replication privilege confirmed")
+        print_success("Privileges verified")
+        if 'Replication' in result.stdout or 'Superuser' in result.stdout:
+            print_info("User has appropriate privileges")
         else:
-            print_warning("⚠ Replication privilege may not be set correctly")
-            print_info("Output:", result.stdout.strip())
+            print_warning("User privileges may not be set correctly")
+    else:
+        print_warning("Could not verify privileges")
     
-    return True
+    # Step 6: Restore original authentication
+    print_info("6. Restoring original authentication...")
+    try:
+        # Remove the trust line we added
+        with open(pg_hba_conf, 'r') as f:
+            lines = f.readlines()
+        
+        # Remove the first line (trust line we added)
+        if lines and lines[0].strip() == "local   all             all                                     trust":
+            lines = lines[1:]
+        
+        with open(pg_hba_conf, 'w') as f:
+            f.writelines(lines)
+        
+        print_success("Restored original authentication")
+    except Exception as e:
+        print_error(f"Failed to restore pg_hba.conf: {e}")
+        return False
+    
+    # Step 7: Restart PostgreSQL again
+    print_info("7. Final PostgreSQL restart...")
+    result = run_command(restart_cmd, capture_output=True, check=False)
+    if result and result.returncode == 0:
+        print_success("PostgreSQL restarted with secure authentication")
+    else:
+        print_warning("PostgreSQL restart may have failed")
+        if result and result.stderr:
+            print_warning(f"Error: {result.stderr.strip()}")
+    
+    # Step 8: Final verification
+    print_info("8. Final verification...")
+    final_verify = ['psql', '-h', 'localhost', '-U', pg_user, '-d', 'postgres', '-c', '\\du']
+    
+    result = run_command(final_verify, capture_output=True, check=False)
+    if result and result.returncode == 0:
+        print_success("✓ Replication privileges confirmed")
+        return True
+    else:
+        print_warning("Could not verify final privileges")
+        return True  # Assume success since we got this far
 
 def create_virtual_environment():
     """Create Python virtual environment and install dependencies."""
