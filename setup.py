@@ -733,7 +733,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bo
     print_warning("  - Stop command may need Ctrl+C")
     print_warning("  - Script may have shell compatibility issues")
     
-    if not ask_yes_no("\nAttempt automatic Alfresco restart?", default=False):
+    if not ask_yes_no("\nAttempt automatic Alfresco restart?", default=True):
         print_info("\nManual restart required:")
         print_info(f"  {alf_base_dir}/alfresco.sh stop")
         print_info(f"  {alf_base_dir}/alfresco.sh start")
