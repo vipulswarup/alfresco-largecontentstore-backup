@@ -880,9 +880,130 @@ def create_virtual_environment():
         print_error(f"Error setting up virtual environment: {e}")
         return False
 
+def configure_cron_job():
+    """Configure cron job for automated backups."""
+    print_header("Step 7: Configure Cron Job")
+    
+    real_user, real_uid, real_gid = get_real_user()
+    current_dir = Path.cwd().absolute()
+    venv_python = current_dir / 'venv' / 'bin' / 'python'
+    backup_script = current_dir / 'backup.py'
+    log_file = Path('/var/log/alfresco-backup-cron.log')
+    
+    print_info("Setting up automated daily backups via cron.")
+    print_info(f"Cron job will be added for user: {real_user}")
+    
+    # Check if cron job already exists
+    result = run_command(['crontab', '-l'], capture_output=True, check=False)
+    existing_crontab = result.stdout if result and result.returncode == 0 else ""
+    
+    if 'backup.py' in existing_crontab and str(current_dir) in existing_crontab:
+        print_success("Cron job already configured")
+        print_info("\nExisting cron entry found:")
+        for line in existing_crontab.split('\n'):
+            if 'backup.py' in line:
+                print_info(f"  {line}")
+        
+        if not ask_yes_no("\nReconfigure cron job?", default=False):
+            return True
+    
+    # Ask for schedule
+    print_info("\nDefault schedule: Daily at 2:00 AM")
+    if ask_yes_no("Use default schedule?", default=True):
+        cron_time = "0 2 * * *"
+        schedule_desc = "2:00 AM daily"
+    else:
+        print_info("\nEnter cron schedule (format: minute hour day month weekday)")
+        print_info("Examples:")
+        print_info("  0 2 * * *    - 2:00 AM every day")
+        print_info("  0 3 * * 0    - 3:00 AM every Sunday")
+        print_info("  0 */6 * * *  - Every 6 hours")
+        cron_time = input(f"{Colors.OKCYAN}Cron schedule: {Colors.ENDC}").strip() or "0 2 * * *"
+        schedule_desc = cron_time
+    
+    # Create log file if it doesn't exist
+    print_info(f"\nLog file will be: {log_file}")
+    if not log_file.exists():
+        try:
+            # Create log file with proper permissions
+            log_file.touch()
+            os.chown(log_file, real_uid, real_gid)
+            os.chmod(log_file, 0o644)
+            print_success(f"Created log file: {log_file}")
+        except PermissionError:
+            print_warning(f"Cannot create {log_file} - will need sudo")
+            if ask_yes_no("Create log file with sudo?"):
+                run_command(['sudo', 'touch', str(log_file)], check=False)
+                run_command(['sudo', 'chown', f'{real_user}:{real_user}', str(log_file)], check=False)
+                run_command(['sudo', 'chmod', '644', str(log_file)], check=False)
+    
+    # Build cron command
+    cron_command = f"cd {current_dir} && {venv_python} {backup_script} >> {log_file} 2>&1"
+    cron_entry = f"{cron_time} {cron_command}"
+    
+    print_info("\nCron entry to be added:")
+    print_info(f"  {cron_entry}")
+    print_info(f"\nThis will run backups: {schedule_desc}")
+    
+    if not ask_yes_no("\nAdd this cron job?"):
+        print_warning("Skipping cron job configuration")
+        print_info("\nTo add manually later:")
+        print_info("  crontab -e")
+        print_info(f"  # Add: {cron_entry}")
+        return False
+    
+    # Add cron job
+    try:
+        # Build new crontab content
+        new_crontab = existing_crontab
+        
+        # Remove any existing backup.py entries for this directory to avoid duplicates
+        if existing_crontab:
+            lines = []
+            for line in existing_crontab.split('\n'):
+                if not ('backup.py' in line and str(current_dir) in line):
+                    lines.append(line)
+            new_crontab = '\n'.join(lines).strip()
+        
+        # Add new entry
+        if new_crontab:
+            new_crontab += '\n'
+        new_crontab += f"\n# Alfresco backup - added by setup script\n"
+        new_crontab += f"{cron_entry}\n"
+        
+        # Write new crontab
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+            f.write(new_crontab)
+            temp_file = f.name
+        
+        try:
+            # Install new crontab
+            result = run_command(['crontab', temp_file], check=False)
+            if result and result.returncode == 0:
+                print_success("Cron job added successfully")
+                
+                # Verify
+                result = run_command(['crontab', '-l'], capture_output=True, check=False)
+                if result and 'backup.py' in result.stdout:
+                    print_success("Verified: Cron job is active")
+                return True
+            else:
+                print_error("Failed to add cron job")
+                return False
+        finally:
+            os.unlink(temp_file)
+            
+    except Exception as e:
+        print_error(f"Error configuring cron job: {e}")
+        print_info("\nTo add manually:")
+        print_info("  crontab -e")
+        print_info(f"  # Add: {cron_entry}")
+        return False
+
 def verify_installation():
     """Verify the installation."""
-    print_header("Step 7: Verify Installation")
+    print_header("Step 8: Verify Installation")
     
     print_info("Performing comprehensive verification of all components...")
     
@@ -1064,13 +1185,9 @@ def verify_installation():
     if all(checks):
         print_success("\n✓ All critical checks passed!")
         print_info("\nYour backup system is ready to use.")
-        print_info("\nNext steps:")
-        print_info("  1. Test the backup:")
-        print_info("     source venv/bin/activate")
-        print_info("     python backup.py")
-        print_info("  2. Set up cron job for automated backups:")
-        print_info("     crontab -e")
-        print_info("     # Add: 0 2 * * * cd $(pwd) && $(pwd)/venv/bin/python $(pwd)/backup.py >> /var/log/alfresco-backup-cron.log 2>&1")
+        print_info("\nNext step - Test the backup:")
+        print_info("  source venv/bin/activate")
+        print_info("  python backup.py")
         return True
     else:
         print_error("\n✗ Some critical checks failed. Please review the errors above.")
@@ -1119,7 +1236,10 @@ def main():
     # Step 6: Create virtual environment
     create_virtual_environment()
     
-    # Step 7: Verify
+    # Step 7: Configure cron job
+    configure_cron_job()
+    
+    # Step 8: Verify
     verify_installation()
     
     print_header("Setup Complete!")
