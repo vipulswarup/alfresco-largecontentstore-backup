@@ -688,23 +688,128 @@ def configure_postgresql():
     
     print_success("pg_hba.conf updated successfully")
     
-    # Instructions for restarting
+    # Instructions for restarting and granting privileges
     print_info("\n" + "="*80)
-    print_info("IMPORTANT: RESTART POSTGRESQL")
+    print_info("IMPORTANT: RESTART ALFRESCO AND GRANT REPLICATION PRIVILEGES")
     print_info("="*80)
     
-    print_warning("\n⚠ PostgreSQL must be restarted for changes to take effect")
-    print_info("\nTo restart Alfresco's embedded PostgreSQL:")
-    print_info("  1. Stop Alfresco:")
-    print_info(f"     {alf_base_dir}/alfresco.sh stop")
-    print_info("  2. Start Alfresco:")
-    print_info(f"     {alf_base_dir}/alfresco.sh start")
-    print_info("\nOR if you have systemd service:")
-    print_info("  sudo systemctl restart alfresco")
+    print_warning("\n⚠ Alfresco must be restarted for PostgreSQL changes to take effect")
+    print_warning("⚠ The replication privilege must be granted after restart")
     
-    if ask_yes_no("\nWould you like to see the grant replication privilege command?"):
-        print_info("\nAfter restarting, grant replication privilege:")
-        print_info(f"  psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+    if ask_yes_no("\nWould you like to restart Alfresco and grant replication privileges automatically?"):
+        return restart_alfresco_and_grant_privileges(alf_base_dir, pg_user)
+    else:
+        print_info("\nManual steps required:")
+        print_info("  1. Stop Alfresco:")
+        print_info(f"     {alf_base_dir}/alfresco.sh stop")
+        print_info("  2. Start Alfresco:")
+        print_info(f"     {alf_base_dir}/alfresco.sh start")
+        print_info("  3. Grant replication privilege:")
+        print_info(f"     psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+        return True
+
+def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str) -> bool:
+    """Restart Alfresco and grant replication privileges."""
+    print_info("\n" + "="*60)
+    print_info("RESTARTING ALFRESCO")
+    print_info("="*60)
+    
+    alfresco_script = Path(alf_base_dir) / 'alfresco.sh'
+    
+    if not alfresco_script.exists():
+        print_error(f"Alfresco control script not found: {alfresco_script}")
+        return False
+    
+    print_info(f"Stopping Alfresco using: {alfresco_script}")
+    print_warning("Note: Alfresco stop may take a while or appear to hang.")
+    print_warning("If it gets stuck, you may need to press Ctrl+C and try again.")
+    
+    if not ask_yes_no("\nProceed with stopping Alfresco?"):
+        print_warning("Skipping Alfresco restart")
+        return False
+    
+    # Stop Alfresco
+    print_info("\nStopping Alfresco...")
+    result = run_command([str(alfresco_script), 'stop'], capture_output=True, check=False)
+    
+    if result and result.returncode != 0:
+        print_warning(f"Alfresco stop command returned exit code {result.returncode}")
+        if result.stderr:
+            print_warning(f"Error output: {result.stderr.strip()}")
+        print_warning("This is normal - Alfresco stop often returns non-zero exit codes")
+    
+    # Wait a moment for processes to stop
+    print_info("Waiting for processes to stop...")
+    import time
+    time.sleep(5)
+    
+    # Start Alfresco
+    print_info("\nStarting Alfresco...")
+    result = run_command([str(alfresco_script), 'start'], capture_output=True, check=False)
+    
+    if result and result.returncode != 0:
+        print_error(f"Alfresco start failed with exit code {result.returncode}")
+        if result.stderr:
+            print_error(f"Error: {result.stderr.strip()}")
+        return False
+    
+    print_success("Alfresco started successfully")
+    
+    # Wait for PostgreSQL to be ready
+    print_info("Waiting for PostgreSQL to be ready...")
+    time.sleep(10)
+    
+    # Grant replication privileges
+    print_info("\n" + "="*60)
+    print_info("GRANTING REPLICATION PRIVILEGES")
+    print_info("="*60)
+    
+    print_info(f"Granting replication privilege to user: {pg_user}")
+    print_info("Note: This requires superuser access to PostgreSQL")
+    
+    # Try different methods to connect as superuser
+    superuser_methods = [
+        # Method 1: Try connecting as the same user that runs PostgreSQL (evadm)
+        ['psql', '-h', 'localhost', '-U', 'alfresco', '-d', 'postgres', '-c', f'ALTER USER {pg_user} REPLICATION;'],
+        # Method 2: Try with sudo to the user running PostgreSQL
+        ['sudo', '-u', 'alfresco', 'psql', '-h', 'localhost', '-U', 'alfresco', '-d', 'postgres', '-c', f'ALTER USER {pg_user} REPLICATION;'],
+    ]
+    
+    success = False
+    for i, method in enumerate(superuser_methods, 1):
+        print_info(f"\nTrying method {i}: {' '.join(method[:4])}...")
+        
+        result = run_command(method, capture_output=True, check=False)
+        
+        if result and result.returncode == 0:
+            print_success("Replication privilege granted successfully")
+            success = True
+            break
+        else:
+            print_warning(f"Method {i} failed")
+            if result and result.stderr:
+                print_warning(f"Error: {result.stderr.strip()}")
+    
+    if not success:
+        print_error("Failed to grant replication privilege automatically")
+        print_info("\nYou may need to grant it manually:")
+        print_info(f"  psql -h localhost -U alfresco -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+        print_info("\nOr if that doesn't work, try:")
+        print_info(f"  sudo -u alfresco psql -h localhost -U alfresco -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+        return False
+    
+    # Verify the privilege was granted
+    print_info("\nVerifying replication privilege...")
+    verify_cmd = ['psql', '-h', 'localhost', '-U', 'alfresco', '-d', 'postgres', '-c', 
+                  f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
+    
+    result = run_command(verify_cmd, capture_output=True, check=False)
+    if result and result.returncode == 0:
+        if 't' in result.stdout:  # 't' means true
+            print_success("✓ Replication privilege confirmed")
+        else:
+            print_warning("⚠ Replication privilege may not be set correctly")
+            print_info("Output:", result.stdout.strip())
     
     return True
 
