@@ -35,6 +35,17 @@ def backup_postgres(config):
         result['error'] = f"Invalid backup path: {e}"
         return result
     
+    # Use embedded PostgreSQL tools to avoid version mismatch
+    # Alfresco has its own PostgreSQL 9.4 binaries that match the server version
+    embedded_pg_basebackup = config.alf_base_dir / 'postgresql' / 'bin' / 'pg_basebackup'
+    
+    if embedded_pg_basebackup.exists():
+        pg_basebackup_cmd = str(embedded_pg_basebackup)
+        print(f"Using embedded pg_basebackup: {pg_basebackup_cmd}")
+    else:
+        pg_basebackup_cmd = 'pg_basebackup'
+        print(f"Embedded pg_basebackup not found, using system version: {pg_basebackup_cmd}")
+    
     # Set PGPASSWORD for pg_basebackup
     env = {
         'PGPASSWORD': config.pgpassword,
@@ -42,7 +53,7 @@ def backup_postgres(config):
     }
     
     cmd = [
-        'pg_basebackup',
+        pg_basebackup_cmd,
         '-h', config.pghost,
         '-p', config.pgport,
         '-U', config.pguser,
