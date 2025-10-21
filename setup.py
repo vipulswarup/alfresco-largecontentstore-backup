@@ -849,15 +849,20 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
         ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} start'],
     ]
     
-    # Stop Alfresco
+    # Stop Alfresco with timeout
     print_info("\nStopping Alfresco...")
     stop_cmd = stop_commands[0]
     print_info(f"Running: sudo -u {real_user} bash -c 'cd {alf_base_dir} && bash {alfresco_script} stop'")
+    print_info("Stop command timeout: 30 seconds")
     
-    result = run_command(stop_cmd, capture_output=True, check=False)
+    # Use timeout to prevent hanging
+    timeout_cmd = ['timeout', '30'] + stop_cmd
+    result = run_command(timeout_cmd, capture_output=True, check=False)
     
     if result and result.returncode == 0:
         print_success("Alfresco stop command completed")
+    elif result and result.returncode == 124:
+        print_warning("Alfresco stop command timed out after 30 seconds - process may be stuck")
     else:
         print_warning("Alfresco stop command may have failed")
         if result:
@@ -872,7 +877,10 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     elapsed = 0
     check_interval = 2
     
-    while elapsed < timeout:
+    # Start with a shorter timeout since stop command already had 30 seconds
+    remaining_timeout = 30
+    
+    while elapsed < remaining_timeout:
         pid = find_alfresco_java_process(real_user, alf_base_dir)
         if not pid:
             print_success(f"Alfresco stopped successfully (after {elapsed} seconds)")
@@ -882,10 +890,10 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
         elapsed += check_interval
         
         if elapsed % 10 == 0:
-            print_info(f"  Still waiting... ({elapsed}/{timeout} seconds)")
+            print_info(f"  Still waiting... ({elapsed}/{remaining_timeout} seconds)")
     else:
         # Timeout reached, force kill
-        print_warning(f"Alfresco did not stop gracefully after {timeout} seconds")
+        print_warning(f"Alfresco did not stop gracefully after {remaining_timeout} seconds")
         pid = find_alfresco_java_process(real_user, alf_base_dir)
         if pid:
             print_warning(f"Found Alfresco Java process (PID: {pid})")
