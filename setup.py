@@ -713,13 +713,19 @@ def configure_postgresql():
     print_warning("\n⚠ Alfresco must be restarted for PostgreSQL changes to take effect")
     print_warning("⚠ The replication privilege must be granted after restart")
     
-    if ask_yes_no("\nWould you like to restart Alfresco and grant replication privileges automatically?"):
+    print_info(f"\nThe script will automatically:")
+    print_info(f"  1. Restart Alfresco to apply PostgreSQL configuration changes")
+    print_info(f"  2. Grant replication privilege to '{pg_user}' using superuser '{pg_superuser}'")
+    print_info(f"  3. Verify the privilege was granted successfully")
+    
+    if ask_yes_no("\nProceed with automatic restart and privilege grant?", default=True):
         restart_success = restart_alfresco_and_grant_privileges(alf_base_dir, pg_user, pg_password, pg_superuser, pg_database)
         if not restart_success:
-            print_warning("\n⚠ Automatic restart failed - manual restart required")
-            print_info("\nManual steps:")
+            print_warning("\n⚠ Automatic setup encountered issues")
+            print_info("\nIf needed, run these manual steps:")
             print_info(f"  1. Restart Alfresco: bash {alf_base_dir}/alfresco.sh stop && bash {alf_base_dir}/alfresco.sh start")
-            print_info(f"  2. Grant privilege: psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+            print_info(f"  2. Grant privilege (using superuser): psql -h localhost -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+            print_info(f"  3. Or use embedded PostgreSQL: {alf_base_dir}/postgresql/bin/psql -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
         # Return True anyway - PostgreSQL is configured, just needs manual restart
         return True
     else:
@@ -728,8 +734,10 @@ def configure_postgresql():
         print_info(f"     bash {alf_base_dir}/alfresco.sh stop")
         print_info("  2. Start Alfresco:")
         print_info(f"     bash {alf_base_dir}/alfresco.sh start")
-        print_info("  3. Grant replication privilege:")
-        print_info(f"     psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+        print_info("  3. Grant replication privilege (using superuser):")
+        print_info(f"     psql -h localhost -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+        print_info(f"  4. Or use embedded PostgreSQL:")
+        print_info(f"     {alf_base_dir}/postgresql/bin/psql -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
         return True
 
 
@@ -1084,8 +1092,12 @@ def configure_cron_job():
     print_info("Setting up automated daily backups via cron.")
     print_info(f"Cron job will be added for user: {real_user}")
     
+    running_as_root = is_running_as_root()
+    
     # Check if cron job already exists
-    result = run_command(['crontab', '-l'], capture_output=True, check=False)
+    # Use -u flag when running as root to target the real user's crontab
+    crontab_cmd = ['crontab', '-u', real_user, '-l'] if running_as_root else ['crontab', '-l']
+    result = run_command(crontab_cmd, capture_output=True, check=False)
     existing_crontab = result.stdout if result and result.returncode == 0 else ""
     
     if 'backup.py' in existing_crontab and str(current_dir) in existing_crontab:
@@ -1198,15 +1210,17 @@ def configure_cron_job():
             temp_file = f.name
         
         try:
-            # Install new crontab
-            result = run_command(['crontab', temp_file], check=False)
+            # Install new crontab (use -u flag when running as root)
+            install_cmd = ['crontab', '-u', real_user, temp_file] if running_as_root else ['crontab', temp_file]
+            result = run_command(install_cmd, check=False)
             if result and result.returncode == 0:
                 print_success("Cron job added successfully")
                 
-                # Verify
-                result = run_command(['crontab', '-l'], capture_output=True, check=False)
+                # Verify (use -u flag when running as root)
+                verify_cmd = ['crontab', '-u', real_user, '-l'] if running_as_root else ['crontab', '-l']
+                result = run_command(verify_cmd, capture_output=True, check=False)
                 if result and 'backup.py' in result.stdout:
-                    print_success("Verified: Cron job is active")
+                    print_success(f"Verified: Cron job is active for user {real_user}")
                 return True
             else:
                 print_error("Failed to add cron job")
@@ -1305,8 +1319,10 @@ def verify_installation():
     # Check replication privilege
     print_info("\n[4/8] Checking PostgreSQL replication privilege...")
     pg_user = config.get('PGUSER', 'alfresco')
+    pg_superuser = config.get('PGSUPERUSER', 'postgres')
     pg_host = config.get('PGHOST', 'localhost')
     pg_port = config.get('PGPORT', '5432')
+    alf_base_dir = config.get('ALF_BASE_DIR', '/opt/alfresco')
     
     verify_cmd = ['psql', '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', 'postgres', '-t', '-c', 
                   f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
@@ -1319,7 +1335,10 @@ def verify_installation():
             checks.append(True)
         else:
             print_error(f"Replication privilege NOT granted to {pg_user}")
-            print_info("  Run after restart: psql -h localhost -U alfresco -d postgres -c \"ALTER USER alfresco REPLICATION;\"")
+            print_info(f"  Run this command using the PostgreSQL superuser:")
+            print_info(f"  psql -h localhost -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+            print_info(f"  Or use embedded PostgreSQL:")
+            print_info(f"  {alf_base_dir}/postgresql/bin/psql -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
             checks.append(False)
     else:
         print_warning("Cannot verify replication privilege (PostgreSQL may not be running)")
