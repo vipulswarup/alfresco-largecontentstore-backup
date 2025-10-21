@@ -1079,7 +1079,7 @@ def configure_cron_job():
     current_dir = Path.cwd().absolute()
     venv_python = current_dir / 'venv' / 'bin' / 'python'
     backup_script = current_dir / 'backup.py'
-    log_file = Path('/var/log/alfresco-backup-cron.log')
+    log_dir = Path('/var/log/alfresco-backup')
     
     print_info("Setting up automated daily backups via cron.")
     print_info(f"Cron job will be added for user: {real_user}")
@@ -1112,29 +1112,58 @@ def configure_cron_job():
         cron_time = input(f"{Colors.OKCYAN}Cron schedule: {Colors.ENDC}").strip() or "0 2 * * *"
         schedule_desc = cron_time
     
-    # Create log file if it doesn't exist
-    print_info(f"\nLog file will be: {log_file}")
-    if not log_file.exists():
-        try:
-            # Create log file with proper permissions
-            log_file.touch()
-            os.chown(log_file, real_uid, real_gid)
-            os.chmod(log_file, 0o644)
-            print_success(f"Created log file: {log_file}")
-        except PermissionError:
-            print_warning(f"Cannot create {log_file} - will need sudo")
-            if ask_yes_no("Create log file with sudo?"):
-                run_command(['sudo', 'touch', str(log_file)], check=False)
-                run_command(['sudo', 'chown', f'{real_user}:{real_user}', str(log_file)], check=False)
-                run_command(['sudo', 'chmod', '644', str(log_file)], check=False)
+    # Create log directory if it doesn't exist
+    print_info(f"\nLog directory will be: {log_dir}")
+    print_info(f"Log files will be: {log_dir}/cron-YYYY-MM-DD.log")
     
-    # Build cron command
-    cron_command = f"cd {current_dir} && {venv_python} {backup_script} >> {log_file} 2>&1"
+    if not log_dir.exists():
+        try:
+            # Try to create directory without sudo first
+            log_dir.mkdir(parents=True, exist_ok=True)
+            os.chown(log_dir, real_uid, real_gid)
+            os.chmod(log_dir, 0o755)
+            print_success(f"Created log directory: {log_dir}")
+        except PermissionError:
+            print_warning(f"Cannot create {log_dir} - need sudo")
+            if ask_yes_no("Create log directory with sudo?"):
+                result = run_command(['sudo', 'mkdir', '-p', str(log_dir)], check=False)
+                if result is None or result.returncode == 0:
+                    run_command(['sudo', 'chown', f'{real_user}:{real_user}', str(log_dir)], check=False)
+                    run_command(['sudo', 'chmod', '755', str(log_dir)], check=False)
+                    print_success(f"Created log directory: {log_dir}")
+                else:
+                    print_error(f"Failed to create log directory")
+                    print_warning("Cron job will fail without a writable log directory")
+                    return False
+            else:
+                print_warning("Cron job will fail without a writable log directory")
+                return False
+    else:
+        print_success(f"Log directory already exists: {log_dir}")
+        # Verify permissions
+        try:
+            test_file = log_dir / '.test'
+            test_file.touch()
+            test_file.unlink()
+            print_success(f"Log directory is writable by {real_user}")
+        except PermissionError:
+            print_error(f"Log directory exists but is not writable by {real_user}")
+            if ask_yes_no("Fix permissions with sudo?"):
+                run_command(['sudo', 'chown', f'{real_user}:{real_user}', str(log_dir)], check=False)
+                run_command(['sudo', 'chmod', '755', str(log_dir)], check=False)
+                print_success("Fixed log directory permissions")
+            else:
+                print_warning("Cron job may fail due to permission issues")
+                return False
+    
+    # Build cron command with date-stamped log file
+    cron_command = f"cd {current_dir} && {venv_python} {backup_script} >> {log_dir}/cron-$(date +\\%Y-\\%m-\\%d).log 2>&1"
     cron_entry = f"{cron_time} {cron_command}"
     
     print_info("\nCron entry to be added:")
     print_info(f"  {cron_entry}")
     print_info(f"\nThis will run backups: {schedule_desc}")
+    print_info(f"Logs will be written to: {log_dir}/cron-YYYY-MM-DD.log")
     
     if not ask_yes_no("\nAdd this cron job?"):
         print_warning("Skipping cron job configuration")

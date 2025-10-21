@@ -223,7 +223,7 @@ For daily backups at 2 AM, add to crontab:
 crontab -e
 
 # Add this line (adjust paths if needed):
-0 2 * * * cd /opt/alfresco-largecontentstore-backup && /opt/alfresco-largecontentstore-backup/venv/bin/python /opt/alfresco-largecontentstore-backup/backup.py >> /var/log/alfresco-backup-cron.log 2>&1
+0 2 * * * cd /opt/alfresco-largecontentstore-backup && /opt/alfresco-largecontentstore-backup/venv/bin/python /opt/alfresco-largecontentstore-backup/backup.py >> /var/log/alfresco-backup/cron-$(date +\%Y-\%m-\%d).log 2>&1
 ```
 
 **If installed system-wide:**
@@ -232,14 +232,14 @@ crontab -e
 crontab -e
 
 # Add this line:
-0 2 * * * cd /opt/alfresco-largecontentstore-backup && python3 backup.py >> /var/log/alfresco-backup-cron.log 2>&1
+0 2 * * * cd /opt/alfresco-largecontentstore-backup && python3 backup.py >> /var/log/alfresco-backup/cron-$(date +\%Y-\%m-\%d).log 2>&1
 ```
 
-**Create the log file with proper permissions:**
+**Create the log directory with proper permissions:**
 ```bash
-sudo touch /var/log/alfresco-backup-cron.log
-sudo chown $USER:$USER /var/log/alfresco-backup-cron.log
-sudo chmod 644 /var/log/alfresco-backup-cron.log
+sudo mkdir -p /var/log/alfresco-backup
+sudo chown $USER:$USER /var/log/alfresco-backup
+sudo chmod 755 /var/log/alfresco-backup
 ```
 
 ## What Gets Backed Up
