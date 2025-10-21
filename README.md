@@ -2,6 +2,8 @@
 
 Python-based backup system for Alfresco Content Management System with PostgreSQL and contentstore backups.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ## Features
 
 - PostgreSQL WAL configuration validation (validates archiving is enabled)
@@ -12,6 +14,8 @@ Python-based backup system for Alfresco Content Management System with PostgreSQ
 - Email alerts on failures with detailed error information
 - File-based locking to prevent concurrent executions
 - Comprehensive logging
+- Point-in-Time Recovery (PITR) support via WAL archiving
+- Detailed restore procedures (see [RESTORE.md](RESTORE.md))
 
 ## Requirements
 
@@ -436,6 +440,21 @@ The Python version has identical performance to the bash script because:
 - Python overhead is negligible (50ms startup vs hours of backup time)
 - Same rsync hardlink strategy for space efficiency
 
+## Restore Procedures
+
+**For detailed restore instructions, see [RESTORE.md](RESTORE.md)**
+
+The restore documentation includes:
+- Full PostgreSQL restore from base backup
+- Contentstore restore procedures
+- Complete system restore (database + contentstore)
+- Point-in-Time Recovery (PITR) using WAL files
+- Verification procedures
+- Troubleshooting common restore issues
+- Emergency restore checklists
+
+**Important:** Test your restore procedures regularly on a non-production system to ensure you can recover when needed.
+
 ## Troubleshooting
 
 **Permission denied when installing packages in venv**:
@@ -477,4 +496,20 @@ pip install -r requirements.txt
 - `.env` file is gitignored and contains sensitive credentials
 - Never commit `.env` to version control
 - Set appropriate file permissions: `chmod 600 .env`
+
+## Documentation
+
+This backup system includes comprehensive documentation:
+
+- **[README.md](README.md)** (this file) - Setup, installation, and usage
+- **[RESTORE.md](RESTORE.md)** - Detailed restore procedures with step-by-step instructions
+- **[RESTORE_QUICK_REFERENCE.md](RESTORE_QUICK_REFERENCE.md)** - Quick command reference for common restore scenarios
+- **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - System overview, architecture, and maintenance guide
+- **[env.example](env.example)** - Configuration template
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+**Summary:** Free to use, modify, and distribute. No warranty provided. No liability accepted.
 
