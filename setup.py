@@ -539,28 +539,53 @@ def update_pg_hba_conf(file_path: Path, pg_user: str) -> bool:
         with open(file_path, 'r') as f:
             lines = f.readlines()
         
-        # Check if replication entries already exist for this user
-        replication_pattern = f"replication     {pg_user}"
-        entries_exist = any(replication_pattern in line and not line.strip().startswith('#') for line in lines)
+        # Check for each specific entry type
+        has_local = False
+        has_ipv4 = False
+        has_ipv6 = False
         
-        if entries_exist:
-            print_info(f"  Replication entries for {pg_user} already exist")
+        for line in lines:
+            if line.strip().startswith('#'):
+                continue
+            if f"local   replication     {pg_user}" in line:
+                has_local = True
+            if f"host    replication     {pg_user}        127.0.0.1/32" in line:
+                has_ipv4 = True
+            if f"host    replication     {pg_user}        ::1/128" in line:
+                has_ipv6 = True
+        
+        # Check if all entries exist
+        if has_local and has_ipv4 and has_ipv6:
+            print_info(f"  All replication entries for {pg_user} already exist")
             return True
         
-        # Add entries for local (Unix socket), IPv4, and IPv6 connections
+        # Add missing entries
         new_lines = lines.copy()
-        new_lines.append(f"\n# Added by backup setup script for pg_basebackup\n")
-        new_lines.append(f"# Allow replication connections via Unix socket\n")
-        new_lines.append(f"local   replication     {pg_user}                                md5\n")
-        new_lines.append(f"# Allow replication connections via TCP/IP from localhost (IPv4)\n")
-        new_lines.append(f"host    replication     {pg_user}        127.0.0.1/32            md5\n")
-        new_lines.append(f"# Allow replication connections via TCP/IP from localhost (IPv6)\n")
-        new_lines.append(f"host    replication     {pg_user}        ::1/128                 md5\n")
+        entries_added = []
+        
+        if not has_local and not has_ipv4 and not has_ipv6:
+            # Add header comment only if adding all entries
+            new_lines.append(f"\n# Added by backup setup script for pg_basebackup\n")
+        
+        if not has_local:
+            new_lines.append(f"# Allow replication connections via Unix socket\n")
+            new_lines.append(f"local   replication     {pg_user}                                md5\n")
+            entries_added.append("local")
+        
+        if not has_ipv4:
+            new_lines.append(f"# Allow replication connections via TCP/IP from localhost (IPv4)\n")
+            new_lines.append(f"host    replication     {pg_user}        127.0.0.1/32            md5\n")
+            entries_added.append("IPv4")
+        
+        if not has_ipv6:
+            new_lines.append(f"# Allow replication connections via TCP/IP from localhost (IPv6)\n")
+            new_lines.append(f"host    replication     {pg_user}        ::1/128                 md5\n")
+            entries_added.append("IPv6")
         
         with open(file_path, 'w') as f:
             f.writelines(new_lines)
         
-        print_info(f"  Added: local, IPv4, and IPv6 replication entries for {pg_user}")
+        print_info(f"  Added replication entries for {pg_user}: {', '.join(entries_added)}")
         return True
         
     except Exception as e:
@@ -747,6 +772,30 @@ def configure_postgresql():
 
 
 
+def find_alfresco_java_process(real_user: str, alf_base_dir: str) -> Optional[int]:
+    """Find the Alfresco Tomcat Java process PID."""
+    try:
+        # Look for Java process running Tomcat with Alfresco directory
+        cmd = ['pgrep', '-u', real_user, '-f', f'java.*{alf_base_dir}']
+        result = run_command(cmd, capture_output=True, check=False)
+        
+        if result and result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split('\n')
+            if pids:
+                return int(pids[0])  # Return first matching PID
+        return None
+    except:
+        return None
+
+def kill_alfresco_process(pid: int, real_user: str) -> bool:
+    """Send SIGTERM to Alfresco process."""
+    try:
+        print_warning(f"Sending SIGTERM to process {pid}...")
+        result = run_command(['sudo', '-u', real_user, 'kill', '-15', str(pid)], capture_output=True, check=False)
+        return result and result.returncode == 0
+    except:
+        return False
+
 def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_password: str, pg_superuser: str = 'postgres', pg_database: str = 'postgres') -> bool:
     """Restart Alfresco and grant replication privileges."""
     print_info("\n" + "="*60)
@@ -764,7 +813,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     
     print_warning("\nNote: Alfresco restart can be unpredictable:")
     print_warning("  - May take a long time or appear to hang")
-    print_warning("  - Stop command may need Ctrl+C")
+    print_warning("  - If not stopped within 60 seconds, will be forcefully terminated")
     print_warning("  - Script may have shell compatibility issues")
     
     if not ask_yes_no("\nAttempt automatic Alfresco restart?", default=True):
@@ -777,7 +826,6 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
         return False
     
     import time
-    
     
     # Run as the correct user (evadm) only
     real_user, real_uid, real_gid = get_real_user()
@@ -798,18 +846,54 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     result = run_command(stop_cmd, capture_output=True, check=False)
     
     if result and result.returncode == 0:
-        print_success("Alfresco stopped successfully")
+        print_success("Alfresco stop command completed")
     else:
-        print_warning("Alfresco stop may have failed")
+        print_warning("Alfresco stop command may have failed")
         if result:
             if result.stdout:
                 print_info(f"Output: {result.stdout.strip()}")
             if result.stderr:
                 print_warning(f"Error: {result.stderr.strip()}")
     
-    # Wait for processes to stop
-    print_info("Waiting for processes to stop...")
-    time.sleep(5)
+    # Wait for processes to stop with timeout
+    print_info("Waiting for Alfresco processes to stop (timeout: 60 seconds)...")
+    timeout = 60
+    elapsed = 0
+    check_interval = 2
+    
+    while elapsed < timeout:
+        pid = find_alfresco_java_process(real_user, alf_base_dir)
+        if not pid:
+            print_success(f"Alfresco stopped successfully (after {elapsed} seconds)")
+            break
+        
+        time.sleep(check_interval)
+        elapsed += check_interval
+        
+        if elapsed % 10 == 0:
+            print_info(f"  Still waiting... ({elapsed}/{timeout} seconds)")
+    else:
+        # Timeout reached, force kill
+        print_warning(f"Alfresco did not stop gracefully after {timeout} seconds")
+        pid = find_alfresco_java_process(real_user, alf_base_dir)
+        if pid:
+            print_warning(f"Found Alfresco Java process (PID: {pid})")
+            if kill_alfresco_process(pid, real_user):
+                print_success(f"Sent SIGTERM to process {pid}")
+                time.sleep(5)  # Give it a few seconds to terminate
+                
+                # Check if it's still running
+                if find_alfresco_java_process(real_user, alf_base_dir):
+                    print_warning("Process still running after SIGTERM, may need manual intervention")
+                else:
+                    print_success("Process terminated successfully")
+            else:
+                print_error("Failed to send SIGTERM to process")
+        else:
+            print_success("Alfresco process not found (may have stopped)")
+    
+    # Additional wait to ensure cleanup
+    time.sleep(3)
     
     # Start Alfresco
     print_info("\nStarting Alfresco...")
