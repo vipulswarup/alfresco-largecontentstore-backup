@@ -245,7 +245,7 @@ sudo chmod 755 /var/log/alfresco-backup
 ## What Gets Backed Up
 
 1. **PostgreSQL Database**: Full base backup using pg_basebackup in compressed tar format
-2. **Contentstore**: All files in `ALF_BASE_DIR/contentstore` using rsync with hardlinks
+2. **Contentstore**: All files in `ALF_BASE_DIR/alf_data/contentstore` using rsync with hardlinks
 3. **WAL Files**: Monitored in `BACKUP_DIR/pg_wal` for PITR capability
 
 ## PostgreSQL WAL Configuration Requirements

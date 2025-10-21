@@ -70,7 +70,7 @@ class BackupConfig:
             print(f"ERROR: Alfresco base directory does not exist: {self.alf_base_dir}")
             sys.exit(1)
         
-        contentstore = self.alf_base_dir / 'contentstore'
+        contentstore = self.alf_base_dir / 'alf_data' / 'contentstore'
         if not contentstore.exists():
             print(f"ERROR: Contentstore directory does not exist: {contentstore}")
             sys.exit(1)

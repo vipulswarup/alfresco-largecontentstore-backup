@@ -17,7 +17,7 @@ def backup_contentstore(config):
     contentstore_dir = config.backup_dir / 'contentstore'
     contentstore_dir.mkdir(parents=True, exist_ok=True)
     
-    source = config.alf_base_dir / 'contentstore'
+    source = config.alf_base_dir / 'alf_data' / 'contentstore'
     destination = contentstore_dir / f'daily-{date_str}'
     last_link = contentstore_dir / 'last'
     
