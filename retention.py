@@ -26,7 +26,7 @@ def apply_retention(config):
         if contentstore_dir.exists():
             for item in contentstore_dir.iterdir():
                 if (item.is_dir() and 
-                    item.name.startswith('daily-') and 
+                    item.name.startswith('contentstore-') and 
                     item.stat().st_mtime < time.time() - (config.retention_days * 86400)):
                     try:
                         shutil.rmtree(item)

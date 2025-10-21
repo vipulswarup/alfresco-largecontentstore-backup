@@ -13,12 +13,12 @@ def backup_postgres(config):
     Returns dict with keys: success, path, error, duration, start_time
     """
     start_time = datetime.now()
-    date_str = start_time.strftime('%Y-%m-%d')
+    timestamp_str = start_time.strftime('%Y-%m-%d_%H-%M-%S')
     
     postgres_dir = config.backup_dir / 'postgres'
     postgres_dir.mkdir(parents=True, exist_ok=True)
     
-    backup_path = postgres_dir / f'base-{date_str}'
+    backup_path = postgres_dir / f'base-{timestamp_str}'
     
     result = {
         'success': False,
@@ -27,6 +27,8 @@ def backup_postgres(config):
         'duration': 0,
         'start_time': start_time.isoformat()
     }
+    
+    # No need to clean up existing directory since we use timestamps for uniqueness
     
     # Validate backup path
     try:
@@ -60,7 +62,8 @@ def backup_postgres(config):
         '-D', str(backup_path),
         '-Ft',  # tar format
         '-z',   # gzip compression
-        '-P'    # progress reporting
+        '-P',   # progress reporting
+        '--no-sync'  # skip fsync for faster backup (acceptable for local backups)
     ]
     
     # Use common subprocess runner

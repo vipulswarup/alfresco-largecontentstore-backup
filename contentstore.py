@@ -12,13 +12,13 @@ def backup_contentstore(config):
     Returns dict with keys: success, path, error, duration, start_time
     """
     start_time = datetime.now()
-    date_str = start_time.strftime('%Y-%m-%d')
+    timestamp_str = start_time.strftime('%Y-%m-%d_%H-%M-%S')
     
     contentstore_dir = config.backup_dir / 'contentstore'
     contentstore_dir.mkdir(parents=True, exist_ok=True)
     
     source = config.alf_base_dir / 'alf_data' / 'contentstore'
-    destination = contentstore_dir / f'daily-{date_str}'
+    destination = contentstore_dir / f'contentstore-{timestamp_str}'
     last_link = contentstore_dir / 'last'
     
     result = {
