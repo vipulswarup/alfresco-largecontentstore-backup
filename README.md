@@ -44,7 +44,7 @@ The setup script will:
   - Detects PostgreSQL version (9.4 for Alfresco 5.2)
   - Updates `postgresql.conf` with version-appropriate WAL settings
   - Uses `hot_standby` for PostgreSQL 9.4, `replica` for 9.6+
-  - Updates `pg_hba.conf` for replication access
+  - Updates `pg_hba.conf` for replication access (Unix socket, IPv4, and IPv6)
   - Creates backups of original config files
 - Create a virtual environment and install dependencies
 - Verify the installation

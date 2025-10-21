@@ -534,28 +534,33 @@ def update_postgresql_conf_setting(file_path: Path, setting: str, value: str, wa
         return False
 
 def update_pg_hba_conf(file_path: Path, pg_user: str) -> bool:
-    """Add replication entry to pg_hba.conf if not already present."""
+    """Add replication entries to pg_hba.conf if not already present."""
     try:
         with open(file_path, 'r') as f:
             lines = f.readlines()
         
-        # Check if replication entry already exists
-        replication_entry = f"local   replication     {pg_user}"
-        entry_exists = any(replication_entry in line for line in lines)
+        # Check if replication entries already exist for this user
+        replication_pattern = f"replication     {pg_user}"
+        entries_exist = any(replication_pattern in line and not line.strip().startswith('#') for line in lines)
         
-        if entry_exists:
-            print_info(f"  Replication entry for {pg_user} already exists")
+        if entries_exist:
+            print_info(f"  Replication entries for {pg_user} already exist")
             return True
         
-        # Add the entry
+        # Add entries for local (Unix socket), IPv4, and IPv6 connections
         new_lines = lines.copy()
         new_lines.append(f"\n# Added by backup setup script for pg_basebackup\n")
+        new_lines.append(f"# Allow replication connections via Unix socket\n")
         new_lines.append(f"local   replication     {pg_user}                                md5\n")
+        new_lines.append(f"# Allow replication connections via TCP/IP from localhost (IPv4)\n")
+        new_lines.append(f"host    replication     {pg_user}        127.0.0.1/32            md5\n")
+        new_lines.append(f"# Allow replication connections via TCP/IP from localhost (IPv6)\n")
+        new_lines.append(f"host    replication     {pg_user}        ::1/128                 md5\n")
         
         with open(file_path, 'w') as f:
             f.writelines(new_lines)
         
-        print_info(f"  Added: local replication entry for {pg_user}")
+        print_info(f"  Added: local, IPv4, and IPv6 replication entries for {pg_user}")
         return True
         
     except Exception as e:
