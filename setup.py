@@ -775,7 +775,7 @@ def configure_postgresql():
 def find_alfresco_java_process(real_user: str, alf_base_dir: str) -> Optional[int]:
     """Find the Alfresco Tomcat Java process PID."""
     try:
-        # Look for Java process running Tomcat with Alfresco directory
+        # First try: Look for Java process with Alfresco directory in command line
         cmd = ['pgrep', '-u', real_user, '-f', f'java.*{alf_base_dir}']
         result = run_command(cmd, capture_output=True, check=False)
         
@@ -783,6 +783,17 @@ def find_alfresco_java_process(real_user: str, alf_base_dir: str) -> Optional[in
             pids = result.stdout.strip().split('\n')
             if pids:
                 return int(pids[0])  # Return first matching PID
+        
+        # Second try: Look for any Java process owned by the user (broader search)
+        cmd = ['pgrep', '-u', real_user, 'java']
+        result = run_command(cmd, capture_output=True, check=False)
+        
+        if result and result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split('\n')
+            if pids:
+                # Return the first Java process (most likely to be Alfresco)
+                return int(pids[0])
+        
         return None
     except:
         return None
