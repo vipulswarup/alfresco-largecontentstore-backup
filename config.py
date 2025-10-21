@@ -39,6 +39,8 @@ class BackupConfig:
         self.pgport = os.getenv('PGPORT')
         self.pguser = os.getenv('PGUSER')
         self.pgpassword = os.getenv('PGPASSWORD')
+        self.pgdatabase = os.getenv('PGDATABASE', 'postgres')
+        self.pgsuperuser = os.getenv('PGSUPERUSER', 'postgres')
         
         # Path settings
         self.backup_dir = Path(os.getenv('BACKUP_DIR'))

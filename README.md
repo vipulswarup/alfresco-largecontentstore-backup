@@ -136,6 +136,8 @@ PGHOST=localhost
 PGPORT=5432
 PGUSER=alfresco
 PGPASSWORD=your_db_password_here
+PGDATABASE=postgres
+PGSUPERUSER=postgres
 
 # Paths
 BACKUP_DIR=/mnt/backups/alfresco
@@ -153,6 +155,25 @@ ALERT_EMAIL=ops-team@yourcompany.com
 ALERT_FROM=backups@yourcompany.com
 EOF
 ```
+
+**Configuration Variables Explained:**
+
+- **PGHOST**: PostgreSQL host (usually `localhost` for embedded Alfresco PostgreSQL)
+- **PGPORT**: PostgreSQL port (default: `5432`)
+- **PGUSER**: PostgreSQL user for backups (this user will be created if it doesn't exist)
+- **PGPASSWORD**: Password for the backup user
+- **PGDATABASE**: Database to connect to (default: `postgres`, the system database)
+- **PGSUPERUSER**: PostgreSQL superuser for granting privileges (usually `postgres` or `alfresco` depending on your installation)
+  - Check with: `psql -U alfresco -d postgres -c "\du"` to see which user has "Superuser" attribute
+- **BACKUP_DIR**: Directory where backups will be stored
+- **ALF_BASE_DIR**: Alfresco installation directory
+- **RETENTION_DAYS**: Number of days to keep old backups
+
+**Important Notes:**
+- The setup script will automatically create the `PGUSER` role if it doesn't exist
+- `PGSUPERUSER` must be a PostgreSQL role with superuser privileges to grant replication rights
+- In some Alfresco installations, `postgres` is the superuser; in others, it's `alfresco`
+- You don't need a Linux user called `postgres` - this refers to PostgreSQL database roles
 
 ### Step 10: Set File Permissions
 ```bash
