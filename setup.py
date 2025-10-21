@@ -1394,22 +1394,26 @@ def verify_installation():
     
     # Check cron job
     print_info("\n[8/8] Checking cron job configuration...")
-    current_user = os.environ.get('USER')
-    if current_user:
-        result = run_command(['crontab', '-l'], capture_output=True, check=False)
-        if result and result.returncode == 0:
-            if 'backup.py' in result.stdout:
-                print_success("Cron job configured for backup.py")
-                checks.append(True)
-            else:
-                print_warning("No cron job found for backup.py")
-                print_info("  Add to crontab for automated backups (see README.md)")
-                warnings.append("Cron job not configured")
-                checks.append(True)  # Not a failure
+    real_user, real_uid, real_gid = get_real_user()
+    running_as_root = is_running_as_root()
+    
+    # Use -u flag when running as root to check the real user's crontab
+    crontab_cmd = ['crontab', '-u', real_user, '-l'] if running_as_root else ['crontab', '-l']
+    result = run_command(crontab_cmd, capture_output=True, check=False)
+    
+    if result and result.returncode == 0:
+        if 'backup.py' in result.stdout:
+            print_success(f"Cron job configured for backup.py (user: {real_user})")
+            checks.append(True)
         else:
-            print_info("No crontab configured yet")
+            print_warning(f"No cron job found for backup.py in {real_user}'s crontab")
+            print_info("  Add to crontab for automated backups (see README.md)")
             warnings.append("Cron job not configured")
             checks.append(True)  # Not a failure
+    else:
+        print_info(f"No crontab configured yet for user {real_user}")
+        warnings.append("Cron job not configured")
+        checks.append(True)  # Not a failure
     
     # Summary
     print_info("\n" + "="*80)
