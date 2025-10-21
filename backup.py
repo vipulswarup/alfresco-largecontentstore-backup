@@ -109,6 +109,8 @@ def main():
                     logging.info(f"PostgreSQL backup completed successfully")
                     logging.info(f"  Path: {pg_result['path']}")
                     logging.info(f"  Duration: {pg_result['duration']:.2f} seconds")
+                    if 'warning' in pg_result:
+                        logging.warning(f"  Warning: {pg_result['warning']}")
                 else:
                     logging.error(f"PostgreSQL backup FAILED")
                     logging.error(f"  Error: {pg_result['error']}")

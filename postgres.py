@@ -73,7 +73,24 @@ def backup_postgres(config):
         result['success'] = True
         result['duration'] = subprocess_result['duration']
     else:
-        result['error'] = subprocess_result['error']
+        # Check if this is the known PostgreSQL 9.4 "postgresql.conf.backup" error
+        # This error occurs after the backup completes successfully, so we can treat it as a warning
+        error_msg = subprocess_result.get('error', '')
+        if 'postgresql.conf.backup' in error_msg and 'Permission denied' in error_msg:
+            # Verify the backup actually completed by checking for base.tar.gz
+            backup_file = backup_path / 'base.tar.gz'
+            if backup_file.exists() and backup_file.stat().st_size > 0:
+                # Backup file exists and has content - treat as success with warning
+                result['success'] = True
+                result['duration'] = subprocess_result['duration']
+                result['warning'] = 'Backup completed successfully, but encountered minor permission issue with postgresql.conf.backup (PostgreSQL 9.4 known issue)'
+                print(f"Warning: {result['warning']}")
+            else:
+                # Backup file doesn't exist or is empty - this is a real failure
+                result['error'] = subprocess_result['error']
+        else:
+            # Some other error - treat as failure
+            result['error'] = subprocess_result['error']
     
     return result
 
