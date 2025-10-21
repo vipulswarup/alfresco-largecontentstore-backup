@@ -62,8 +62,7 @@ def backup_postgres(config):
         '-D', str(backup_path),
         '-Ft',  # tar format
         '-z',   # gzip compression
-        '-P',   # progress reporting
-        '--no-sync'  # skip fsync for faster backup (acceptable for local backups)
+        '-P'    # progress reporting
     ]
     
     # Use common subprocess runner
