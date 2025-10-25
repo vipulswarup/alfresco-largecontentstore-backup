@@ -6,6 +6,7 @@ Python-based backup system for Alfresco Content Management System with PostgreSQ
 
 ## Features
 
+**Backup Features:**
 - PostgreSQL WAL configuration validation (validates archiving is enabled)
 - PostgreSQL base backup using pg_basebackup
 - Contentstore rsync with hardlink optimization for space efficiency
@@ -15,7 +16,17 @@ Python-based backup system for Alfresco Content Management System with PostgreSQ
 - File-based locking to prevent concurrent executions
 - Comprehensive logging
 - Point-in-Time Recovery (PITR) support via WAL archiving
-- Detailed restore procedures (see [RESTORE.md](RESTORE.md))
+
+**Restore Features (NEW):**
+- **Automated interactive restore script** (`restore.py`)
+- Full system restore (PostgreSQL + Contentstore)
+- **Point-in-Time Recovery (PITR)** - recover to any point in time
+- Real-time progress bars for all restore operations
+- Automatic backup of current data before restore
+- Backup integrity validation before restore
+- Detailed progress logging with timestamps
+- User confirmation for safety
+- Interactive configuration collection
 
 ## Requirements
 
@@ -245,6 +256,113 @@ sudo mkdir -p /var/log/alfresco-backup
 sudo chown $USER:$USER /var/log/alfresco-backup
 sudo chmod 755 /var/log/alfresco-backup
 ```
+
+## Using the Restore Script
+
+The automated restore script (`restore.py`) provides an interactive interface for restoring Alfresco from backups.
+
+### Running the Restore Script
+
+```bash
+cd /opt/alfresco-largecontentstore-backup
+python3 restore.py
+```
+
+The script will:
+1. **Collect configuration interactively** (backup directory, Alfresco base directory, etc.)
+2. **Let you select restore mode** (Full system, PostgreSQL only, or Contentstore only)
+3. **List available backups** and let you choose which ones to restore
+4. **Validate backups** before starting restore
+5. **Require confirmation** before proceeding
+6. **Automatically back up current data** before restoring
+7. **Stop Alfresco**, restore data, and start Alfresco again
+8. **Log all operations** with detailed timestamps
+
+### Restore Modes
+
+**1. Full System Restore** (Recommended)
+- Restores both PostgreSQL and Contentstore
+- Ensures database and content are synchronized
+- Validates both backups before starting
+
+**2. Point-in-Time Recovery (PITR)** (NEW)
+- Recovers database to any point in time using WAL files
+- Select a base backup and target recovery time
+- Automatically configures PostgreSQL recovery settings
+- Perfect for recovering from accidental data changes
+
+**3. PostgreSQL Only**
+- Restores only the database
+- Useful for database corruption recovery
+
+**4. Contentstore Only**
+- Restores only the content files
+- Useful for content loss recovery
+
+### Safety Features
+
+- **Automatic backup**: Current data is automatically backed up before restore
+- **Backup validation**: Checks backup integrity before starting
+- **User confirmation**: Requires typing 'RESTORE' to confirm
+- **Detailed logging**: All operations logged to file with timestamps
+- **Verification**: Checks that services are stopped before restore
+- **Progress bars**: Real-time progress indicators for restore operations (NEW)
+
+### Example Restore Session
+
+```
+$ python3 restore.py
+
+================================================================================
+  Alfresco Restore Configuration
+================================================================================
+
+Please provide the following information:
+
+Backup directory path (BACKUP_DIR): /mnt/backups/alfresco
+Alfresco base directory (ALF_BASE_DIR): /opt/eisenvault_installations/alfresco-home
+Alfresco username [evadm]: evadm
+Log file directory [/current/directory]: .
+
+================================================================================
+  Restore Mode Selection
+================================================================================
+
+Select restore mode:
+  1. Full system restore (PostgreSQL + Contentstore)
+  2. Point-in-Time Recovery (PITR)
+  3. PostgreSQL only
+  4. Contentstore only
+
+Enter choice (1-4): 1
+
+Available PostgreSQL backups:
+--------------------------------------------------------------------------------
+  1. 2025-10-21_14-31-23
+  2. 2025-10-20_02-00-15
+  3. 2025-10-19_02-00-12
+
+Select PostgreSQL backup (1-3): 1
+
+Available Contentstore backups:
+--------------------------------------------------------------------------------
+  1. 2025-10-21_14-31-23
+  2. 2025-10-20_02-00-15
+  3. 2025-10-19_02-00-12
+
+Select Contentstore backup (1-3): 1
+
+About to restore:
+  PostgreSQL: 2025-10-21_14-31-23
+  Contentstore: 2025-10-21_14-31-23
+
+WARNING: This will stop Alfresco and replace current data!
+Current data will be backed up automatically.
+
+Type 'RESTORE' to confirm: RESTORE
+```
+
+For detailed manual restore procedures, see [RESTORE.md](RESTORE.md).
 
 ## What Gets Backed Up
 
