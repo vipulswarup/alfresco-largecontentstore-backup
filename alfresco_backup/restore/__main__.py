@@ -15,7 +15,30 @@ from pathlib import Path
 from argparse import ArgumentParser
 from typing import Dict, List, Optional, Tuple
 import tempfile
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover
+    class _DummyTqdm:
+        def __init__(self, iterable=None, total=None, unit=None, desc=None):
+            self._iterable = iterable if iterable is not None else range(total or 0)
+
+        def __iter__(self):
+            return iter(self._iterable)
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def close(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def tqdm(iterable=None, total=None, unit=None, desc=None):  # type: ignore
+        return _DummyTqdm(iterable=iterable, total=total, unit=unit, desc=desc)
 
 
 class RestoreConfig:
