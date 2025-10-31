@@ -1,7 +1,7 @@
 """WAL archive monitoring."""
 
 from pathlib import Path
-from subprocess_utils import SubprocessRunner, validate_path
+from alfresco_backup.utils.subprocess_utils import SubprocessRunner, validate_path
 
 
 def check_wal_archive(config):
