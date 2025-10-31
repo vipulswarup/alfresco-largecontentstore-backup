@@ -160,7 +160,10 @@ def create_env_file():
     pg_user = input(f"{Colors.OKCYAN}PostgreSQL backup user [alfresco]: {Colors.ENDC}").strip() or 'alfresco'
     pg_password = input(f"{Colors.OKCYAN}PostgreSQL backup user password: {Colors.ENDC}").strip()
     pg_database = input(f"{Colors.OKCYAN}PostgreSQL database [postgres]: {Colors.ENDC}").strip() or 'postgres'
-    pg_superuser = input(f"{Colors.OKCYAN}PostgreSQL superuser (for granting privileges) [postgres]: {Colors.ENDC}").strip() or 'postgres'
+    default_superuser = pg_user if pg_user else 'postgres'
+    pg_superuser = input(
+        f"{Colors.OKCYAN}PostgreSQL superuser (for granting privileges) [{default_superuser}]: {Colors.ENDC}"
+    ).strip() or default_superuser
     
     # Auto-detect PostgreSQL system user
     pg_system_user = get_postgres_user()
@@ -957,8 +960,18 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     
     # Pre-check: Skip if replication already granted
     psql_bin = Path(alf_base_dir) / "postgresql" / "bin" / "psql"
+    effective_superuser = pg_superuser or pg_user
+    
     if psql_bin.exists():
-        check_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', pg_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
+        superuser_check = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', 'SELECT 1;']
+        result = run_command(superuser_check, capture_output=True, check=False)
+        if not (result and result.returncode == 0):
+            if pg_user and pg_superuser != pg_user:
+                print_warning(f"Could not connect as PostgreSQL superuser '{pg_superuser}'. Falling back to '{pg_user}'.")
+            effective_superuser = pg_user
+
+    if psql_bin.exists():
+        check_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
         result = run_command(check_cmd, capture_output=True, check=False)
         if result and result.returncode == 0 and 't' in result.stdout:
             print_success(f"User {pg_user} already has replication privileges")
@@ -1027,7 +1040,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     
     # Step 4: Check if PostgreSQL role exists, create if needed
     print_info("4. Checking if PostgreSQL role exists...")
-    check_role_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', pg_superuser, '-d', pg_database, '-t', '-c', f"SELECT 1 FROM pg_roles WHERE rolname = '{pg_user}';"]
+    check_role_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-t', '-c', f"SELECT 1 FROM pg_roles WHERE rolname = '{pg_user}';"]
     
     result = run_command(check_role_cmd, capture_output=True, check=False)
     role_exists = result and result.returncode == 0 and '1' in result.stdout
@@ -1037,7 +1050,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
         print_info(f"Creating PostgreSQL role '{pg_user}'...")
         
         # Create the role with LOGIN and password
-        create_role_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', pg_superuser, '-d', pg_database, '-c', f"CREATE ROLE {pg_user} LOGIN PASSWORD '{pg_password}';"]
+        create_role_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"CREATE ROLE {pg_user} LOGIN PASSWORD '{pg_password}';"]
         
         result = run_command(create_role_cmd, capture_output=True, check=False)
         if result and result.returncode == 0:
@@ -1054,7 +1067,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     print_info("5. Granting replication privileges...")
     
     # Connect as superuser with trust authentication
-    psql_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', pg_superuser, '-d', pg_database, '-c', f'ALTER USER {pg_user} WITH REPLICATION;']
+    psql_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f'ALTER USER {pg_user} WITH REPLICATION;']
     
     result = run_command(psql_cmd, capture_output=True, check=False)
     if result and result.returncode == 0:
@@ -1067,7 +1080,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     
     # Step 6: Verify privileges
     print_info("6. Verifying privileges...")
-    verify_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', pg_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
+    verify_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
     
     result = run_command(verify_cmd, capture_output=True, check=False)
     if result and result.returncode == 0:
@@ -1110,7 +1123,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     
     # Step 9: Final verification
     print_info("9. Final verification...")
-    final_verify = ['sudo', '-u', real_user, str(psql_bin), '-U', pg_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
+    final_verify = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
     
     result = run_command(final_verify, capture_output=True, check=False)
     if result and result.returncode == 0:
