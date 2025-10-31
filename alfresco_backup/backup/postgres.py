@@ -3,7 +3,10 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from alfresco_backup.utils.subprocess_utils import SubprocessRunner, validate_path
+try:
+    from alfresco_backup.utils.subprocess_utils import SubprocessRunner, validate_path
+except ImportError:  # pragma: no cover
+    from ..utils.subprocess_utils import SubprocessRunner, validate_path
 
 
 def backup_postgres(config):

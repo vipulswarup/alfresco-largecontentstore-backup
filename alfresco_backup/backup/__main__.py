@@ -11,14 +11,24 @@ from datetime import datetime
 from pathlib import Path
 from argparse import ArgumentParser
 
-from alfresco_backup.utils.config import BackupConfig
-from alfresco_backup.utils.lock import FileLock
-from alfresco_backup.utils.wal_config_check import check_wal_configuration
-from alfresco_backup.backup.postgres import backup_postgres
-from alfresco_backup.backup.contentstore import backup_contentstore
-from alfresco_backup.backup.wal import check_wal_archive
-from alfresco_backup.backup.retention import apply_retention
-from alfresco_backup.backup.email_alert import send_failure_alert
+try:
+    from alfresco_backup.utils.config import BackupConfig
+    from alfresco_backup.utils.lock import FileLock
+    from alfresco_backup.utils.wal_config_check import check_wal_configuration
+    from alfresco_backup.backup.postgres import backup_postgres
+    from alfresco_backup.backup.contentstore import backup_contentstore
+    from alfresco_backup.backup.wal import check_wal_archive
+    from alfresco_backup.backup.retention import apply_retention
+    from alfresco_backup.backup.email_alert import send_failure_alert
+except ImportError:  # pragma: no cover
+    from ..utils.config import BackupConfig
+    from ..utils.lock import FileLock
+    from ..utils.wal_config_check import check_wal_configuration
+    from .postgres import backup_postgres
+    from .contentstore import backup_contentstore
+    from .wal import check_wal_archive
+    from .retention import apply_retention
+    from .email_alert import send_failure_alert
 
 
 def setup_logging(backup_dir):

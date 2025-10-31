@@ -1,5 +1,6 @@
 """Email alerting for backup failures."""
 
+import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -14,6 +15,11 @@ def send_failure_alert(backup_results, config):
         backup_results: dict with results from all backup operations
         config: BackupConfig instance
     """
+    if not getattr(config, 'email_enabled', True):
+        logging.getLogger(__name__).warning(
+            "Email alerts disabled; skipping failure notification."
+        )
+        return
     subject = f"ALERT: Alfresco Backup Failed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     
     # Build detailed email body

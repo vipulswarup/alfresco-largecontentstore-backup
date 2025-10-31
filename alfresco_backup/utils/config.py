@@ -24,7 +24,9 @@ class BackupConfig:
         """Load environment variables and validate required fields."""
         required_vars = [
             'PGHOST', 'PGPORT', 'PGUSER', 'PGPASSWORD',
-            'BACKUP_DIR', 'ALF_BASE_DIR', 'RETENTION_DAYS',
+            'BACKUP_DIR', 'ALF_BASE_DIR', 'RETENTION_DAYS'
+        ]
+        optional_email_vars = [
             'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD',
             'ALERT_EMAIL', 'ALERT_FROM'
         ]
@@ -33,6 +35,14 @@ class BackupConfig:
         if missing:
             print(f"ERROR: Missing required environment variables: {', '.join(missing)}")
             sys.exit(1)
+        
+        missing_email = [var for var in optional_email_vars if not os.getenv(var)]
+        self.email_enabled = len(missing_email) == 0
+        if missing_email:
+            print(
+                "WARNING: Email alerts disabled due to missing variables: "
+                + ', '.join(missing_email)
+            )
         
         # Database settings
         self.pghost = os.getenv('PGHOST')
@@ -54,12 +64,20 @@ class BackupConfig:
             sys.exit(1)
         
         # Email settings
-        self.smtp_host = os.getenv('SMTP_HOST')
-        self.smtp_port = int(os.getenv('SMTP_PORT'))
-        self.smtp_user = os.getenv('SMTP_USER')
-        self.smtp_password = os.getenv('SMTP_PASSWORD')
-        self.alert_email = os.getenv('ALERT_EMAIL')
-        self.alert_from = os.getenv('ALERT_FROM')
+        if self.email_enabled:
+            self.smtp_host = os.getenv('SMTP_HOST')
+            self.smtp_port = int(os.getenv('SMTP_PORT'))
+            self.smtp_user = os.getenv('SMTP_USER')
+            self.smtp_password = os.getenv('SMTP_PASSWORD')
+            self.alert_email = os.getenv('ALERT_EMAIL')
+            self.alert_from = os.getenv('ALERT_FROM')
+        else:
+            self.smtp_host = None
+            self.smtp_port = None
+            self.smtp_user = None
+            self.smtp_password = None
+            self.alert_email = None
+            self.alert_from = None
         
         # Validate paths
         if not self.backup_dir.exists():
