@@ -64,7 +64,15 @@ class RestoreConfig:
             errors.append(f"Alfresco base directory does not exist: {self.alf_base_dir}")
         
         if self.alf_base_dir:
-            self.postgres_data_dir = Path(self.alf_base_dir) / 'alf_data' / 'postgresql' / 'data'
+            pg_root = Path(self.alf_base_dir) / 'alf_data' / 'postgresql'
+            pg_data_candidate = pg_root / 'data'
+            if (pg_root / 'PG_VERSION').exists():
+                self.postgres_data_dir = pg_root
+            elif (pg_data_candidate / 'PG_VERSION').exists():
+                self.postgres_data_dir = pg_data_candidate
+            else:
+                self.postgres_data_dir = pg_root
+
             self.contentstore_dir = Path(self.alf_base_dir) / 'alf_data' / 'contentstore'
             self.alfresco_script = Path(self.alf_base_dir) / 'alfresco.sh'
             
@@ -170,7 +178,8 @@ class AlfrescoRestore:
         
         try:
             if self.config.postgres_data_dir and self.config.postgres_data_dir.exists():
-                backup_pg = self.config.postgres_data_dir.parent / f'data.backup.{timestamp}'
+                backup_name = f"{self.config.postgres_data_dir.name}.backup.{timestamp}"
+                backup_pg = self.config.postgres_data_dir.parent / backup_name
                 subprocess.run(['sudo', 'mv', str(self.config.postgres_data_dir), str(backup_pg)], check=True)
                 self.logger.info(f"Backed up PostgreSQL data to: {backup_pg}")
             
@@ -276,6 +285,8 @@ class AlfrescoRestore:
             return False
         
         try:
+            if self.config.postgres_data_dir.exists():
+                subprocess.run(['sudo', 'rm', '-rf', str(self.config.postgres_data_dir)], check=True)
             self.config.postgres_data_dir.mkdir(parents=True, exist_ok=True)
             
             self.logger.info("Extracting PostgreSQL backup...")
