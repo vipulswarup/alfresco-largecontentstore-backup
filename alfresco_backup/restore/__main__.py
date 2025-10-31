@@ -37,8 +37,8 @@ except ImportError:  # pragma: no cover
         def __exit__(self, *_args):
             return False
 
-    def tqdm(iterable=None, total=None, unit=None, desc=None):  # type: ignore
-        return _DummyTqdm(iterable=iterable, total=total, unit=unit, desc=desc)
+    def tqdm(iterable=None, total=None, **_kwargs):  # type: ignore
+        return _DummyTqdm(iterable=iterable, total=total)
 
 
 class RestoreConfig:
