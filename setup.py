@@ -78,18 +78,23 @@ def ask_yes_no(question: str, default: bool = True) -> bool:
         print_warning("Please answer 'y' or 'n'")
 
 def run_command(cmd: list, capture_output: bool = False, check: bool = True) -> Optional[subprocess.CompletedProcess]:
-    """Run a shell command. Returns CompletedProcess or None."""
+    """Run a shell command with consistent logging."""
+    print_info(f"Running command: {' '.join(cmd)}")
     try:
         result = subprocess.run(cmd, capture_output=capture_output, text=True, check=False)
-        
-        if result.returncode != 0 and check:
-            print_error(f"Command failed with exit code {result.returncode}: {' '.join(cmd)}")
-            if capture_output and result.stderr:
-                print_error(f"Error: {result.stderr.strip()}")
-            return None
-        
-        return result if (capture_output or not check) else None
-        
+        if result.returncode != 0:
+            print_error(f"Command exited with {result.returncode}")
+            if capture_output:
+                if result.stdout:
+                    print_info(f"STDOUT:\n{result.stdout.strip()}")
+                if result.stderr:
+                    print_error(f"STDERR:\n{result.stderr.strip()}")
+            if check:
+                return None
+        else:
+            if capture_output and result.stdout:
+                print_info(f"STDOUT:\n{result.stdout.strip()}")
+        return result
     except FileNotFoundError:
         print_error(f"Command not found: {cmd[0]}")
         return None
