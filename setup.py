@@ -848,10 +848,11 @@ def ensure_os_postgres_user() -> tuple[Optional[str], bool]:
     if not (create and create.returncode == 0):
         print_error("Failed to create OS user 'postgres'")
         return None, False
-    passwd_cmd = ['bash', '-c', "echo 'postgres:postgres@123' | chpasswd"]
-    passwd_result = run_command(passwd_cmd, capture_output=True, check=False)
-    if not (passwd_result and passwd_result.returncode == 0):
-        print_error("Failed to set password for OS user 'postgres'")
+    lock_result = run_command(['passwd', '-l', 'postgres'], capture_output=True, check=False)
+    if lock_result and lock_result.returncode == 0:
+        run_command(['usermod', '-L', 'postgres'], capture_output=True, check=False)
+    else:
+        print_warning("Could not lock temporary 'postgres' account; removing user")
         run_command(['userdel', '-r', 'postgres'], capture_output=True, check=False)
         return None, False
     atexit.register(disable_os_postgres_user, True)
