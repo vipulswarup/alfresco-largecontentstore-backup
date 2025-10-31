@@ -953,15 +953,31 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     print_info(f"Granting replication privilege to user: {pg_user}")
     print_info("Note: This requires superuser access to PostgreSQL")
     
-    # Grant replication privileges using the embedded PostgreSQL approach
-    print_header("GRANTING REPLICATION PRIVILEGES")
-    
-    real_user, real_uid, real_gid = get_real_user()
-    
-    # Pre-check: Skip if replication already granted
+    # Define paths and temporary trust configuration
+    pg_data_dir = Path(alf_base_dir) / "alf_data" / "postgresql"
+    pg_hba_conf = pg_data_dir / "pg_hba.conf"
+    pg_ctl_script = Path(alf_base_dir) / "postgresql" / "scripts" / "ctl.sh"
+    pg_ctl_bin = Path(alf_base_dir) / "postgresql" / "bin" / "pg_ctl"
     psql_bin = Path(alf_base_dir) / "postgresql" / "bin" / "psql"
     effective_superuser = pg_superuser or pg_user
-    
+    trust_comment = "# Added by backup setup script for temporary superuser trust\n"
+    trust_line = f"local   all             {effective_superuser}                                trust\n"
+    trust_added = False
+
+    if pg_hba_conf.exists():
+        # Backup authentication file before modifications
+        backup_file(pg_hba_conf)
+        with open(pg_hba_conf, 'r') as f:
+            lines = f.readlines()
+        if trust_line not in lines:
+            print_info(f"Temporarily allowing trust authentication for PostgreSQL role '{effective_superuser}'")
+            lines.insert(0, trust_line)
+            lines.insert(0, trust_comment)
+            with open(pg_hba_conf, 'w') as f:
+                f.writelines(lines)
+            trust_added = True
+
+    # Pre-check: Skip if replication already granted (after ensuring trust access)
     if psql_bin.exists():
         superuser_check = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', 'SELECT 1;']
         result = run_command(superuser_check, capture_output=True, check=False)
@@ -969,19 +985,34 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
             if pg_user and pg_superuser != pg_user:
                 print_warning(f"Could not connect as PostgreSQL superuser '{pg_superuser}'. Falling back to '{pg_user}'.")
             effective_superuser = pg_user
+            trust_line = f"local   all             {effective_superuser}                                trust\n"
+            if pg_hba_conf.exists():
+                with open(pg_hba_conf, 'r') as f:
+                    lines = f.readlines()
+                if trust_line not in lines:
+                    print_info(f"Temporarily allowing trust authentication for PostgreSQL role '{effective_superuser}'")
+                    lines.insert(0, trust_line)
+                    lines.insert(0, trust_comment)
+                    with open(pg_hba_conf, 'w') as f:
+                        f.writelines(lines)
+                    trust_added = True
 
     if psql_bin.exists():
         check_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
         result = run_command(check_cmd, capture_output=True, check=False)
         if result and result.returncode == 0 and 't' in result.stdout:
             print_success(f"User {pg_user} already has replication privileges")
+            # Clean up temporary trust if we added it
+            if trust_added and pg_hba_conf.exists():
+                with open(pg_hba_conf, 'r') as f:
+                    lines = f.readlines()
+                if trust_comment in lines:
+                    lines.remove(trust_comment)
+                if trust_line in lines:
+                    lines.remove(trust_line)
+                with open(pg_hba_conf, 'w') as f:
+                    f.writelines(lines)
             return True
-    pg_data_dir = Path(alf_base_dir) / "alf_data" / "postgresql"
-    pg_hba_conf = pg_data_dir / "pg_hba.conf"
-    pg_ctl_script = Path(alf_base_dir) / "postgresql" / "scripts" / "ctl.sh"
-    pg_ctl_bin = Path(alf_base_dir) / "postgresql" / "bin" / "pg_ctl"
-    psql_bin = Path(alf_base_dir) / "postgresql" / "bin" / "psql"
-    
     print_info("Using embedded PostgreSQL approach:")
     print_info(f"  PostgreSQL data directory: {pg_data_dir}")
     print_info(f"  Authentication config: {pg_hba_conf}")
@@ -994,27 +1025,37 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
         print_error(f"PostgreSQL client not found: {psql_bin}")
         return False
     
-    # Step 1: Backup pg_hba.conf
+    # Step 1: Back up pg_hba.conf
     print_info("\n1. Backing up pg_hba.conf...")
-    backup_file(pg_hba_conf)
+    # Backup already taken above if file exists
+    if not pg_hba_conf.exists():
+        print_warning(f"PostgreSQL config file not found: {pg_hba_conf}")
+        return False
+    else:
+        print_info("Backup already created earlier")
     
     # Step 2: Add trust authentication
     print_info("2. Adding trust authentication...")
-    try:
-        with open(pg_hba_conf, 'r') as f:
-            lines = f.readlines()
-        
-        # Add trust line at the top
-        trust_line = "local   all             all                                     trust\n"
-        lines.insert(0, trust_line)
-        
-        with open(pg_hba_conf, 'w') as f:
-            f.writelines(lines)
-        
-        print_success("Added trust authentication")
-    except Exception as e:
-        print_error(f"Failed to modify pg_hba.conf: {e}")
-        return False
+    if trust_added:
+        print_info(f"Trust entry for role '{effective_superuser}' already configured")
+    else:
+        try:
+            with open(pg_hba_conf, 'r') as f:
+                lines = f.readlines()
+            if trust_line not in lines:
+                print_info(f"Temporarily allowing trust authentication for PostgreSQL role '{effective_superuser}'")
+                if trust_comment not in lines:
+                    lines.insert(0, trust_comment)
+                lines.insert(0, trust_line)
+                with open(pg_hba_conf, 'w') as f:
+                    f.writelines(lines)
+                trust_added = True
+                print_success("Added trust authentication")
+            else:
+                print_info("Trust authentication already present")
+        except Exception as e:
+            print_error(f"Failed to modify pg_hba.conf: {e}")
+            return False
     
     # Step 3: Restart PostgreSQL
     print_info("3. Restarting PostgreSQL...")
@@ -1099,7 +1140,8 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
             lines = f.readlines()
         
         # Remove the exact trust line we added
-        trust_line = "local   all             all                                     trust\n"
+        if trust_comment in lines:
+            lines.remove(trust_comment)
         if trust_line in lines:
             lines.remove(trust_line)
         
