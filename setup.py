@@ -810,6 +810,24 @@ def kill_alfresco_process(pid: int, real_user: str) -> bool:
     except:
         return False
 
+def cleanup_trust(pg_hba_conf: Path, trust_comment: str, trust_line: str) -> bool:
+    """Remove temporary trust lines from pg_hba.conf."""
+    try:
+        with open(pg_hba_conf, 'r') as f:
+            lines = f.readlines()
+        if trust_comment in lines:
+            lines.remove(trust_comment)
+        if trust_line in lines:
+            lines.remove(trust_line)
+        with open(pg_hba_conf, 'w') as f:
+            f.writelines(lines)
+        print_success("Restored original authentication")
+        return True
+    except Exception as e:
+        print_error(f"Failed to restore pg_hba.conf: {e}")
+        return False
+
+
 def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_password: str, pg_superuser: str = 'postgres', pg_database: str = 'postgres') -> bool:
     """Restart Alfresco and grant replication privileges."""
     print_info("\n" + "="*60)
@@ -951,7 +969,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     print_info("="*60)
     
     print_info(f"Granting replication privilege to user: {pg_user}")
-    print_info("Note: This requires superuser access to PostgreSQL")
+    print_info(f"Note: This requires superuser access via role '{pg_superuser or pg_user}'")
     
     # Define paths and temporary trust configuration
     pg_data_dir = Path(alf_base_dir) / "alf_data" / "postgresql"
@@ -966,7 +984,11 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
 
     if pg_hba_conf.exists():
         # Backup authentication file before modifications
-        backup_file(pg_hba_conf)
+        backup_created = backup_file(pg_hba_conf)
+        if backup_created:
+            print_success(f"Backed up PostgreSQL authentication config: {pg_hba_conf}.backup")
+        else:
+            print_info("Using existing pg_hba.conf backup")
         with open(pg_hba_conf, 'r') as f:
             lines = f.readlines()
         if trust_line not in lines:
@@ -997,21 +1019,25 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
                         f.writelines(lines)
                     trust_added = True
 
+    # Reload PostgreSQL configuration to apply trust changes
+    if trust_added:
+        reload_cmd = None
+        if pg_ctl_bin.exists():
+            reload_cmd = ['sudo', '-u', real_user, str(pg_ctl_bin), '-D', str(pg_data_dir), 'reload']
+        elif pg_ctl_script.exists():
+            reload_cmd = ['sudo', '-u', real_user, str(pg_ctl_script), 'reload']
+        if reload_cmd:
+            result = run_command(reload_cmd, capture_output=True, check=False)
+            if result and result.returncode == 0:
+                print_success("PostgreSQL configuration reloaded to apply trust authentication")
+            else:
+                print_warning("PostgreSQL reload failed; continuing with existing session")
+
     if psql_bin.exists():
         check_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
         result = run_command(check_cmd, capture_output=True, check=False)
         if result and result.returncode == 0 and 't' in result.stdout:
             print_success(f"User {pg_user} already has replication privileges")
-            # Clean up temporary trust if we added it
-            if trust_added and pg_hba_conf.exists():
-                with open(pg_hba_conf, 'r') as f:
-                    lines = f.readlines()
-                if trust_comment in lines:
-                    lines.remove(trust_comment)
-                if trust_line in lines:
-                    lines.remove(trust_line)
-                with open(pg_hba_conf, 'w') as f:
-                    f.writelines(lines)
             return True
     print_info("Using embedded PostgreSQL approach:")
     print_info(f"  PostgreSQL data directory: {pg_data_dir}")
@@ -1027,35 +1053,18 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     
     # Step 1: Back up pg_hba.conf
     print_info("\n1. Backing up pg_hba.conf...")
-    # Backup already taken above if file exists
     if not pg_hba_conf.exists():
-        print_warning(f"PostgreSQL config file not found: {pg_hba_conf}")
+        print_error(f"PostgreSQL config file not found: {pg_hba_conf}")
         return False
     else:
-        print_info("Backup already created earlier")
+        print_info("Backup already created earlier in this step")
     
     # Step 2: Add trust authentication
     print_info("2. Adding trust authentication...")
     if trust_added:
         print_info(f"Trust entry for role '{effective_superuser}' already configured")
     else:
-        try:
-            with open(pg_hba_conf, 'r') as f:
-                lines = f.readlines()
-            if trust_line not in lines:
-                print_info(f"Temporarily allowing trust authentication for PostgreSQL role '{effective_superuser}'")
-                if trust_comment not in lines:
-                    lines.insert(0, trust_comment)
-                lines.insert(0, trust_line)
-                with open(pg_hba_conf, 'w') as f:
-                    f.writelines(lines)
-                trust_added = True
-                print_success("Added trust authentication")
-            else:
-                print_info("Trust authentication already present")
-        except Exception as e:
-            print_error(f"Failed to modify pg_hba.conf: {e}")
-            return False
+        print_info("Trust authentication already present; no changes needed")
     
     # Step 3: Restart PostgreSQL
     print_info("3. Restarting PostgreSQL...")
@@ -1124,33 +1133,16 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     verify_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
     
     result = run_command(verify_cmd, capture_output=True, check=False)
-    if result and result.returncode == 0:
-        if 't' in result.stdout:
-            print_success("Replication privilege verified")
-        else:
-            print_warning("Replication privilege not found")
+    if result and result.returncode == 0 and 't' in result.stdout:
+        print_success("Replication privilege verified")
     else:
-        print_warning("Could not verify privileges")
+        print_error("Replication privilege verification failed")
+        cleanup_trust(pg_hba_conf, trust_comment, trust_line)
+        return False
     
     # Step 7: Restore original authentication
     print_info("7. Restoring original authentication...")
-    try:
-        # Remove the trust line we added
-        with open(pg_hba_conf, 'r') as f:
-            lines = f.readlines()
-        
-        # Remove the exact trust line we added
-        if trust_comment in lines:
-            lines.remove(trust_comment)
-        if trust_line in lines:
-            lines.remove(trust_line)
-        
-        with open(pg_hba_conf, 'w') as f:
-            f.writelines(lines)
-        
-        print_success("Restored original authentication")
-    except Exception as e:
-        print_error(f"Failed to restore pg_hba.conf: {e}")
+    if not cleanup_trust(pg_hba_conf, trust_comment, trust_line):
         return False
     
     # Step 8: Restart PostgreSQL again
@@ -1168,12 +1160,12 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     final_verify = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
     
     result = run_command(final_verify, capture_output=True, check=False)
-    if result and result.returncode == 0:
+    if result and result.returncode == 0 and 't' in result.stdout:
         print_success("✓ Replication privileges confirmed")
         return True
     else:
-        print_warning("Could not verify final privileges")
-        return True  # Assume success since we got this far
+        print_error("Replication privileges could not be confirmed; please run the ALTER USER command manually.")
+        return False
 
 def create_virtual_environment():
     """Create Python virtual environment and install dependencies."""
