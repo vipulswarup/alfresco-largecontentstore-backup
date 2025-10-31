@@ -867,17 +867,23 @@ def disable_os_postgres_user(created: bool):
     run_command(['usermod', '-L', 'postgres'], capture_output=True, check=False)
 
 
-def add_temporary_trust(pg_hba_conf: Path) -> list[tuple[str, str]]:
-    """Ensure pg_hba.conf contains a temporary trust entry for local connections."""
+def add_temporary_trust(pg_hba_conf: Path, add_tcp_trust: bool = False) -> list[tuple[str, str]]:
+    """Ensure pg_hba.conf contains temporary trust entries for local connections."""
     entries = [
         ("# Added by backup setup script for temporary postgres trust\n",
          "local   all             postgres                            trust\n"),
     ]
+
+    tcp_comment = "# Added by backup setup script for temporary TCP postgres trust\n"
+    tcp_line = "host    all             postgres        127.0.0.1/32            trust\n"
+
     inserted: list[tuple[str, str]] = []
     if not pg_hba_conf.exists():
         return inserted
+
     with open(pg_hba_conf, 'r') as f:
         lines = f.readlines()
+
     for comment, line in entries:
         if line not in lines:
             print_info("Temporarily allowing trust authentication for PostgreSQL superuser 'postgres'")
@@ -885,9 +891,29 @@ def add_temporary_trust(pg_hba_conf: Path) -> list[tuple[str, str]]:
             if comment not in lines:
                 lines.insert(0, comment)
             inserted.append((comment, line))
+
+    if add_tcp_trust and tcp_line not in lines:
+        print_info("Temporarily allowing TCP trust authentication for PostgreSQL superuser 'postgres'")
+        insertion_index = None
+        for idx, existing in enumerate(lines):
+            stripped = existing.strip()
+            if stripped.startswith('host') and '127.0.0.1/32' in stripped and stripped.endswith('md5'):
+                insertion_index = idx
+                break
+
+        if insertion_index is None:
+            insertion_index = 0
+
+        if tcp_comment not in lines:
+            lines.insert(insertion_index, tcp_comment)
+            insertion_index += 1
+        lines.insert(insertion_index, tcp_line)
+        inserted.append((tcp_comment, tcp_line))
+
     if inserted:
         with open(pg_hba_conf, 'w') as f:
             f.writelines(lines)
+
     return inserted
 
 
@@ -940,6 +966,10 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     print_info("RESTARTING ALFRESCO")
     print_info("="*60)
     
+    config = load_env_config()
+    pg_host = config.get('PGHOST') or '127.0.0.1'
+    pg_port = str(config.get('PGPORT') or '5432')
+
     alfresco_script = Path(alf_base_dir) / 'alfresco.sh'
     
     if not alfresco_script.exists():
@@ -1084,7 +1114,16 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     pg_ctl_bin = Path(alf_base_dir) / "postgresql" / "bin" / "pg_ctl"
     psql_bin = Path(alf_base_dir) / "postgresql" / "bin" / "psql"
     socket_dir = Path(alf_base_dir) / "postgresql" / "tmp"
-    host_args = ['-h', str(socket_dir)] if socket_dir.exists() else []
+    socket_available = socket_dir.exists() and any(socket_dir.glob(".s.PGSQL.*"))
+    if socket_available:
+        host_args = ['-h', str(socket_dir), '-p', pg_port]
+    else:
+        host_args = ['-h', pg_host, '-p', pg_port]
+    requires_tcp_trust = not socket_available
+    if requires_tcp_trust:
+        print_info("PostgreSQL Unix socket not detected; applying temporary TCP trust for postgres user")
+    else:
+        print_info("PostgreSQL Unix socket detected; using socket connection for privilege grant")
     effective_superuser = pg_superuser or pg_user
 
     if not pg_hba_conf.exists():
@@ -1098,12 +1137,22 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     else:
         print_info("Using existing pg_hba.conf backup")
 
-    trust_entries = add_temporary_trust(pg_hba_conf)
+    trust_entries = add_temporary_trust(pg_hba_conf, requires_tcp_trust)
     reload_postgres_config(real_user, pg_ctl_bin, pg_ctl_script, pg_data_dir)
+
+    def restore_trust() -> bool:
+        nonlocal trust_entries
+        if not trust_entries:
+            return True
+        restored = cleanup_trust(pg_hba_conf, trust_entries)
+        if restored:
+            trust_entries = []
+            reload_postgres_config(real_user, pg_ctl_bin, pg_ctl_script, pg_data_dir)
+        return restored
 
     if not psql_bin.exists():
         print_error(f"PostgreSQL client not found: {psql_bin}")
-        cleanup_trust(pg_hba_conf, trust_entries)
+        restore_trust()
         return False
 
     superuser_check = ['sudo', '-u', db_os_user or real_user, str(psql_bin)] + host_args + [
@@ -1116,7 +1165,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     if not (result and result.returncode == 0 and result.stdout.strip() == 't'):
         print_error(f"PostgreSQL role '{effective_superuser}' is not a superuser or cannot connect.")
         print_error("Update PGSUPERUSER in .env to a valid PostgreSQL superuser and rerun the setup.")
-        cleanup_trust(pg_hba_conf, trust_entries)
+        restore_trust()
         return False
 
     check_cmd = ['sudo', '-u', db_os_user or real_user, str(psql_bin)] + host_args + [
@@ -1128,7 +1177,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     result = run_command(check_cmd, capture_output=True, check=False)
     if result and result.returncode == 0 and result.stdout.strip() == 't':
         print_success(f"User {pg_user} already has replication privileges")
-        cleanup_trust(pg_hba_conf, trust_entries)
+        restore_trust()
         return True
 
     print_info("Using embedded PostgreSQL approach:")
@@ -1158,7 +1207,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
         print_info(f"Using: {pg_ctl_bin}")
     else:
         print_error("No PostgreSQL control script found")
-        cleanup_trust(pg_hba_conf, trust_entries)
+        restore_trust()
         return False
 
     result = run_command(restart_cmd, capture_output=True, check=False)
@@ -1193,7 +1242,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
             print_success(f"PostgreSQL role '{pg_user}' created successfully")
         else:
             print_error(f"Failed to create PostgreSQL role '{pg_user}'")
-            cleanup_trust(pg_hba_conf, trust_entries)
+            restore_trust()
             return False
     else:
         print_success(f"PostgreSQL role '{pg_user}' already exists")
@@ -1213,7 +1262,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
         print_success("Replication privilege granted")
     else:
         print_error("Failed to grant replication privilege")
-        cleanup_trust(pg_hba_conf, trust_entries)
+        restore_trust()
         return False
 
     # Step 6: Verify privileges
@@ -1227,12 +1276,12 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     result = run_command(verify_cmd, capture_output=True, check=False)
     if not (result and result.returncode == 0 and result.stdout.strip() == 't'):
         print_error("Replication privilege verification failed")
-        cleanup_trust(pg_hba_conf, trust_entries)
+        restore_trust()
         return False
 
     # Step 7: Restore original authentication
     print_info("7. Restoring original authentication...")
-    if not cleanup_trust(pg_hba_conf, trust_entries):
+    if not restore_trust():
         return False
 
     # Step 8: Final verification
@@ -1246,11 +1295,11 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     result = run_command(final_verify, capture_output=True, check=False)
     if result and result.returncode == 0 and result.stdout.strip() == 't':
         print_success("✓ Replication privileges confirmed")
-        cleanup_trust(pg_hba_conf, trust_entries)
+        restore_trust()
         return True
     else:
         print_error("Replication privileges could not be confirmed; please run the ALTER USER command manually.")
-        cleanup_trust(pg_hba_conf, trust_entries)
+        restore_trust()
         return False
 
 def create_virtual_environment():
