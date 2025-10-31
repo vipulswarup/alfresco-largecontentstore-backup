@@ -1409,7 +1409,11 @@ def verify_installation():
     print_info("\n[3/8] Checking PostgreSQL WAL configuration...")
     alf_base_dir = config.get('ALF_BASE_DIR')
     if alf_base_dir:
-        from wal_config_check import check_wal_configuration
+        try:
+            from alfresco_backup.utils.wal_config_check import check_wal_configuration
+        except ImportError:
+            import importlib
+            check_wal_configuration = importlib.import_module('wal_config_check').check_wal_configuration
         
         # Create a simple config object
         class Config:
