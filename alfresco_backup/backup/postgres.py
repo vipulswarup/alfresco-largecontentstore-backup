@@ -73,8 +73,15 @@ def backup_postgres(config):
     subprocess_result = runner.run_command(cmd, env=env)
     
     if subprocess_result['success']:
-        result['success'] = True
-        result['duration'] = subprocess_result['duration']
+        backup_file = backup_path / 'base.tar.gz'
+        if backup_file.exists() and backup_file.stat().st_size > 1024 * 1024:
+            result['success'] = True
+            result['duration'] = subprocess_result['duration']
+        else:
+            result['error'] = (
+                "pg_basebackup reported success but produced an unexpectedly small archive. "
+                "Verify permissions and rerun the backup."
+            )
     else:
         # Check if this is the known PostgreSQL 9.4 "postgresql.conf.backup" error
         # This error occurs after the backup completes successfully, so we can treat it as a warning
@@ -82,7 +89,7 @@ def backup_postgres(config):
         if 'postgresql.conf.backup' in error_msg and 'Permission denied' in error_msg:
             # Verify the backup actually completed by checking for base.tar.gz
             backup_file = backup_path / 'base.tar.gz'
-            if backup_file.exists() and backup_file.stat().st_size > 0:
+            if backup_file.exists() and backup_file.stat().st_size > 1024 * 1024:
                 # Backup file exists and has content - treat as success with warning
                 result['success'] = True
                 result['duration'] = subprocess_result['duration']
