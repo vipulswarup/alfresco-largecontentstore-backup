@@ -810,18 +810,62 @@ def kill_alfresco_process(pid: int, real_user: str) -> bool:
     except:
         return False
 
-def cleanup_trust(pg_hba_conf: Path, trust_comment: str, trust_line: str) -> bool:
-    """Remove temporary trust lines from pg_hba.conf."""
+def add_temporary_trust(pg_hba_conf: Path, role: str) -> tuple[bool, str, str]:
+    """Ensure pg_hba.conf contains a trust entry for the given role."""
+    comment = f"# Added by backup setup script for temporary trust ({role})\n"
+    line = f"local   all             {role}                                trust\n"
+    if not pg_hba_conf.exists():
+        return False, comment, line
+    with open(pg_hba_conf, 'r') as f:
+        lines = f.readlines()
+    if line not in lines:
+        print_info(f"Temporarily allowing trust authentication for PostgreSQL role '{role}'")
+        if comment not in lines:
+            lines.insert(0, comment)
+        lines.insert(0, line)
+        with open(pg_hba_conf, 'w') as f:
+            f.writelines(lines)
+        return True, comment, line
+    return False, comment, line
+
+
+def reload_postgres_config(real_user: str, pg_ctl_bin: Path, pg_ctl_script: Path, pg_data_dir: Path) -> bool:
+    reload_cmd = None
+    if pg_ctl_bin.exists():
+        reload_cmd = ['sudo', '-u', real_user, str(pg_ctl_bin), '-D', str(pg_data_dir), 'reload']
+    elif pg_ctl_script.exists():
+        reload_cmd = ['sudo', '-u', real_user, str(pg_ctl_script), 'reload']
+    if not reload_cmd:
+        return False
+    result = run_command(reload_cmd, capture_output=True, check=False)
+    if result and result.returncode == 0:
+        print_success("PostgreSQL configuration reloaded")
+        return True
+    print_warning("PostgreSQL reload failed; continuing with existing session")
+    return False
+
+
+def cleanup_trust(pg_hba_conf: Path, trust_entries: list[tuple[str, str]]) -> bool:
+    """Remove temporary trust entries from pg_hba.conf."""
+    if not trust_entries or not pg_hba_conf.exists():
+        return True
     try:
         with open(pg_hba_conf, 'r') as f:
             lines = f.readlines()
-        if trust_comment in lines:
-            lines.remove(trust_comment)
-        if trust_line in lines:
-            lines.remove(trust_line)
-        with open(pg_hba_conf, 'w') as f:
-            f.writelines(lines)
-        print_success("Restored original authentication")
+        changed = False
+        for comment, line in trust_entries:
+            if comment in lines:
+                lines.remove(comment)
+                changed = True
+            if line in lines:
+                lines.remove(line)
+                changed = True
+        if changed:
+            with open(pg_hba_conf, 'w') as f:
+                f.writelines(lines)
+            print_success("Restored original authentication")
+        else:
+            print_info("Temporary trust entries already absent")
         return True
     except Exception as e:
         print_error(f"Failed to restore pg_hba.conf: {e}")
@@ -853,7 +897,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
         print_info(f"  bash {alf_base_dir}/alfresco.sh stop")
         print_info(f"  bash {alf_base_dir}/alfresco.sh start")
         print_info("\nAfter restarting, grant replication privilege:")
-        print_info(f"  psql -h localhost -U {pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+        print_info(f"  sudo -u {real_user} {alf_base_dir}/postgresql/bin/psql -U {pg_superuser or pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
         print_warning("\nSetup will continue, but you must restart Alfresco manually")
         return False
     
@@ -999,58 +1043,38 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
                 f.writelines(lines)
             trust_added = True
 
-    # Pre-check: Skip if replication already granted (after ensuring trust access)
+    # Reload PostgreSQL configuration to apply trust changes
+    reload_postgres_config(real_user, pg_ctl_bin, pg_ctl_script, pg_data_dir)
+
+    # Validate configured superuser has access and privileges
     if psql_bin.exists():
-        superuser_check = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', 'SELECT 1;']
+        superuser_check = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database,
+                           '-t', '-A', '-c', f"SELECT rolsuper FROM pg_roles WHERE rolname = '{effective_superuser}';"]
         result = run_command(superuser_check, capture_output=True, check=False)
         if not (result and result.returncode == 0):
-            if pg_user and pg_superuser != pg_user:
-                print_warning(f"Could not connect as PostgreSQL superuser '{pg_superuser}'. Falling back to '{pg_user}'.")
-            effective_superuser = pg_user
-            trust_line = f"local   all             {effective_superuser}                                trust\n"
-            if pg_hba_conf.exists():
-                with open(pg_hba_conf, 'r') as f:
-                    lines = f.readlines()
-                if trust_line not in lines:
-                    print_info(f"Temporarily allowing trust authentication for PostgreSQL role '{effective_superuser}'")
-                    lines.insert(0, trust_line)
-                    lines.insert(0, trust_comment)
-                    with open(pg_hba_conf, 'w') as f:
-                        f.writelines(lines)
-                    trust_added = True
-
-    # Reload PostgreSQL configuration to apply trust changes
-    if trust_added:
-        reload_cmd = None
-        if pg_ctl_bin.exists():
-            reload_cmd = ['sudo', '-u', real_user, str(pg_ctl_bin), '-D', str(pg_data_dir), 'reload']
-        elif pg_ctl_script.exists():
-            reload_cmd = ['sudo', '-u', real_user, str(pg_ctl_script), 'reload']
-        if reload_cmd:
-            result = run_command(reload_cmd, capture_output=True, check=False)
-            if result and result.returncode == 0:
-                print_success("PostgreSQL configuration reloaded to apply trust authentication")
-            else:
-                print_warning("PostgreSQL reload failed; continuing with existing session")
+            print_error(f"Could not connect to PostgreSQL as superuser role '{effective_superuser}'.")
+            print_error("Please update PGSUPERUSER in .env to a valid PostgreSQL superuser and rerun the setup.")
+            cleanup_trust(pg_hba_conf, [(trust_comment, trust_line)])
+            return False
+        if 't' not in result.stdout.strip():
+            print_error(f"PostgreSQL role '{effective_superuser}' is not a superuser.")
+            print_error("Update PGSUPERUSER in .env to a role with superuser privileges and rerun the setup.")
+            cleanup_trust(pg_hba_conf, [(trust_comment, trust_line)])
+            return False
+    else:
+        print_error(f"PostgreSQL client not found: {psql_bin}")
+        cleanup_trust(pg_hba_conf, [(trust_comment, trust_line)])
+        return False
 
     if psql_bin.exists():
-        check_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
+        check_cmd = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-t', '-A',
+                     '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
         result = run_command(check_cmd, capture_output=True, check=False)
-        if result and result.returncode == 0 and 't' in result.stdout:
+        if result and result.returncode == 0 and result.stdout.strip() == 't':
             print_success(f"User {pg_user} already has replication privileges")
+            cleanup_trust(pg_hba_conf, [(trust_comment, trust_line)])
             return True
-    print_info("Using embedded PostgreSQL approach:")
-    print_info(f"  PostgreSQL data directory: {pg_data_dir}")
-    print_info(f"  Authentication config: {pg_hba_conf}")
-    
-    if not pg_hba_conf.exists():
-        print_error(f"PostgreSQL config file not found: {pg_hba_conf}")
-        return False
-    
-    if not psql_bin.exists():
-        print_error(f"PostgreSQL client not found: {psql_bin}")
-        return False
-    
+
     # Step 1: Back up pg_hba.conf
     print_info("\n1. Backing up pg_hba.conf...")
     if not pg_hba_conf.exists():
@@ -1137,12 +1161,12 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
         print_success("Replication privilege verified")
     else:
         print_error("Replication privilege verification failed")
-        cleanup_trust(pg_hba_conf, trust_comment, trust_line)
+        cleanup_trust(pg_hba_conf, [(trust_comment, trust_line)])
         return False
     
     # Step 7: Restore original authentication
     print_info("7. Restoring original authentication...")
-    if not cleanup_trust(pg_hba_conf, trust_comment, trust_line):
+    if not cleanup_trust(pg_hba_conf, [(trust_comment, trust_line)]):
         return False
     
     # Step 8: Restart PostgreSQL again
@@ -1160,7 +1184,7 @@ def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_pa
     final_verify = ['sudo', '-u', real_user, str(psql_bin), '-U', effective_superuser, '-d', pg_database, '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
     
     result = run_command(final_verify, capture_output=True, check=False)
-    if result and result.returncode == 0 and 't' in result.stdout:
+    if result and result.returncode == 0 and result.stdout.strip() == 't':
         print_success("✓ Replication privileges confirmed")
         return True
     else:
@@ -1495,9 +1519,8 @@ def verify_installation():
         else:
             print_error(f"Replication privilege NOT granted to {pg_user}")
             print_info(f"  Run this command using the PostgreSQL superuser:")
-            print_info(f"  psql -h localhost -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
-            print_info(f"  Or use embedded PostgreSQL:")
-            print_info(f"  {alf_base_dir}/postgresql/bin/psql -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+            print_info(f"  sudo -u {config.get('PG_SYSTEM_USER', get_real_user()[0])} {alf_base_dir}/postgresql/bin/psql -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
+            print_info(f"  (Update PGSUPERUSER in .env if this role fails to connect.)")
             checks.append(False)
     else:
         print_warning("Cannot verify replication privilege (PostgreSQL may not be running)")
