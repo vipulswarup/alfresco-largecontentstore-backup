@@ -65,7 +65,8 @@ def backup_postgres(config):
         '-D', str(backup_path),
         '-Ft',  # tar format
         '-z',   # gzip compression
-        '-P'    # progress reporting
+        '-P',   # progress reporting
+        '-X', 'stream'  # include WAL so restore has required checkpoint
     ]
     
     # Use common subprocess runner
