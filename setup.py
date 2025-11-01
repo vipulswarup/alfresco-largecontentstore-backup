@@ -12,7 +12,6 @@ import subprocess
 import shutil
 from pathlib import Path
 from typing import Optional, Tuple
-import atexit
 
 class Colors:
     HEADER = '\033[95m'
@@ -641,34 +640,11 @@ def configure_postgresql():
     backup_dir = config.get('BACKUP_DIR')
     alf_base_dir = config.get('ALF_BASE_DIR')
     pg_user = config.get('PGUSER', 'alfresco')
-    pg_password = config.get('PGPASSWORD', '')
-    pg_superuser = config.get('PGSUPERUSER', 'postgres')
-    pg_database = config.get('PGDATABASE', 'postgres')
     
     if not backup_dir or not alf_base_dir:
         print_error("BACKUP_DIR or ALF_BASE_DIR not found in .env file")
         return False
-    
-    pg_host = config.get('PGHOST', 'localhost')
-    pg_port = config.get('PGPORT', '5432')
-    pg_system_user = config.get('PG_SYSTEM_USER', get_real_user()[0])
-    socket_dir = Path(alf_base_dir) / 'postgresql' / 'tmp'
-    manual_host = f"-h {socket_dir}" if socket_dir.exists() else f"-h {pg_host} -p {pg_port}"
-    psql_binary = Path(alf_base_dir) / 'postgresql' / 'bin' / 'psql'
-    psql_binary_str = str(psql_binary)
-    os_postgres_user, os_postgres_created = ensure_os_postgres_user()
-    system_user_for_pg = os_postgres_user or pg_system_user
 
-    if not backup_dir or not alf_base_dir:
-        print_error("BACKUP_DIR or ALF_BASE_DIR not found in .env file")
-        disable_os_postgres_user(os_postgres_created)
-        return False
-    
-    socket_dir = Path(alf_base_dir) / 'postgresql' / 'tmp'
-    manual_host = f"-h {socket_dir}" if socket_dir.exists() else f"-h {pg_host} -p {pg_port}"
-    psql_binary = Path(alf_base_dir) / 'postgresql' / 'bin' / 'psql'
-    psql_binary_str = str(psql_binary)
-    
     wal_dir = str(Path(backup_dir) / 'pg_wal')
     
     print_info("Alfresco 5.2 comes with embedded PostgreSQL 9.4.")
@@ -764,544 +740,10 @@ def configure_postgresql():
     
     print_success("pg_hba.conf updated successfully")
     
-    # Instructions for restarting and granting privileges
-    print_info("\n" + "="*80)
-    print_info("IMPORTANT: RESTART ALFRESCO AND GRANT REPLICATION PRIVILEGES")
-    print_info("="*80)
-    
-    print_warning("\n⚠ Alfresco must be restarted for PostgreSQL changes to take effect")
-    print_warning("⚠ The replication privilege must be granted after restart")
-    
-    print_info(f"\nThe script will automatically:")
-    print_info(f"  1. Restart Alfresco to apply PostgreSQL configuration changes")
-    print_info(f"  2. Grant replication privilege to '{pg_user}' using superuser '{pg_superuser}'")
-    print_info(f"  3. Verify the privilege was granted successfully")
-    
-    if ask_yes_no("\nProceed with automatic restart and privilege grant?", default=True):
-        restart_success = restart_alfresco_and_grant_privileges(alf_base_dir, pg_user, pg_password, pg_superuser, pg_database, system_user_for_pg)
-        if not restart_success:
-            print_warning("\n⚠ Automatic setup encountered issues")
-            print_info("\nIf needed, run these manual steps:")
-            print_info(f"  1. Restart Alfresco: bash {alf_base_dir}/alfresco.sh stop && bash {alf_base_dir}/alfresco.sh start")
-            manual_grant_cmd = f"sudo -u {system_user_for_pg} {psql_binary_str} {manual_host} -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\""
-            print_info(f"  2. Grant privilege (using superuser): {manual_grant_cmd}")
-            print_info(f"  3. After success, rerun Step 8 verification in the setup wizard.")
-        # Return True anyway - PostgreSQL is configured, just needs manual restart
-        return True
-    else:
-        print_info("\nManual steps required:")
-        print_info("  1. Stop Alfresco:")
-        print_info(f"     bash {alf_base_dir}/alfresco.sh stop")
-        print_info("  2. Start Alfresco:")
-        print_info(f"     bash {alf_base_dir}/alfresco.sh start")
-        print_info("  3. Grant replication privilege (using superuser):")
-        manual_grant_cmd = f"sudo -u {system_user_for_pg} {psql_binary_str} {manual_host} -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\""
-        print_info(f"     {manual_grant_cmd}")
-        print_info(f"  4. After success, rerun Step 8 verification in the setup wizard.")
-        return True
+    print_info("\nPlease restart Alfresco (alfresco.sh stop/start) for PostgreSQL changes to take effect.")
+    print_info("Replication privileges will be handled automatically during verification.")
 
-
-
-def find_alfresco_java_process(real_user: str, alf_base_dir: str) -> Optional[int]:
-    """Find the Alfresco Tomcat Java process PID."""
-    try:
-        # First try: Look for Java process with Alfresco directory in command line
-        cmd = ['pgrep', '-u', real_user, '-f', f'java.*{alf_base_dir}']
-        result = run_command(cmd, capture_output=True, check=False)
-        
-        if result and result.returncode == 0 and result.stdout.strip():
-            pids = result.stdout.strip().split('\n')
-            if pids:
-                return int(pids[0])  # Return first matching PID
-        
-        # Second try: Look for any Java process owned by the user (broader search)
-        cmd = ['pgrep', '-u', real_user, 'java']
-        result = run_command(cmd, capture_output=True, check=False)
-        
-        if result and result.returncode == 0 and result.stdout.strip():
-            pids = result.stdout.strip().split('\n')
-            if pids:
-                # Return the first Java process (most likely to be Alfresco)
-                return int(pids[0])
-        
-        return None
-    except:
-        return None
-
-def kill_alfresco_process(pid: int, real_user: str) -> bool:
-    """Send SIGTERM to Alfresco process."""
-    try:
-        print_warning(f"Sending SIGTERM to process {pid}...")
-        result = run_command(['sudo', '-u', real_user, 'kill', '-15', str(pid)], capture_output=True, check=False)
-        return result and result.returncode == 0
-    except:
-        return False
-
-def ensure_os_postgres_user() -> tuple[Optional[str], bool]:
-    """Ensure an OS-level 'postgres' account exists for sudo operations."""
-    result = run_command(['id', 'postgres'], capture_output=True, check=False)
-    if result and result.returncode == 0:
-        print_info("Using existing OS user 'postgres'")
-        return 'postgres', False
-    print_info("Creating temporary OS user 'postgres'")
-    create = run_command(['useradd', '-m', 'postgres'], capture_output=True, check=False)
-    if not (create and create.returncode == 0):
-        print_error("Failed to create OS user 'postgres'")
-        return None, False
-    lock_result = run_command(['passwd', '-l', 'postgres'], capture_output=True, check=False)
-    if lock_result and lock_result.returncode == 0:
-        run_command(['usermod', '-L', 'postgres'], capture_output=True, check=False)
-    else:
-        print_warning("Could not lock temporary 'postgres' account; removing user")
-        run_command(['userdel', '-r', 'postgres'], capture_output=True, check=False)
-        return None, False
-    atexit.register(disable_os_postgres_user, True)
-    return 'postgres', True
-
-
-def disable_os_postgres_user(created: bool):
-    """Disable the temporary OS 'postgres' account if we created it."""
-    if not created:
-        return
-    print_info("Disabling temporary OS user 'postgres'")
-    run_command(['passwd', '-l', 'postgres'], capture_output=True, check=False)
-    run_command(['usermod', '-L', 'postgres'], capture_output=True, check=False)
-
-
-def add_temporary_trust(pg_hba_conf: Path, add_tcp_trust: bool = False) -> list[tuple[str, str]]:
-    """Ensure pg_hba.conf contains temporary trust entries for local connections."""
-    entries = [
-        ("# Added by backup setup script for temporary postgres trust\n",
-         "local   all             postgres                            trust\n"),
-    ]
-
-    tcp_comment = "# Added by backup setup script for temporary TCP postgres trust\n"
-    tcp_line = "host    all             postgres        127.0.0.1/32            trust\n"
-
-    inserted: list[tuple[str, str]] = []
-    if not pg_hba_conf.exists():
-        return inserted
-
-    with open(pg_hba_conf, 'r') as f:
-        lines = f.readlines()
-
-    for comment, line in entries:
-        if line not in lines:
-            print_info("Temporarily allowing trust authentication for PostgreSQL superuser 'postgres'")
-            lines.insert(0, line)
-            if comment not in lines:
-                lines.insert(0, comment)
-            inserted.append((comment, line))
-
-    if add_tcp_trust and tcp_line not in lines:
-        print_info("Temporarily allowing TCP trust authentication for PostgreSQL superuser 'postgres'")
-        insertion_index = None
-        for idx, existing in enumerate(lines):
-            stripped = existing.strip()
-            if stripped.startswith('host') and '127.0.0.1/32' in stripped and stripped.endswith('md5'):
-                insertion_index = idx
-                break
-
-        if insertion_index is None:
-            insertion_index = 0
-
-        if tcp_comment not in lines:
-            lines.insert(insertion_index, tcp_comment)
-            insertion_index += 1
-        lines.insert(insertion_index, tcp_line)
-        inserted.append((tcp_comment, tcp_line))
-
-    if inserted:
-        with open(pg_hba_conf, 'w') as f:
-            f.writelines(lines)
-
-    return inserted
-
-
-def reload_postgres_config(real_user: str, pg_ctl_bin: Path, pg_ctl_script: Path, pg_data_dir: Path) -> bool:
-    reload_cmd = None
-    if pg_ctl_bin.exists():
-        reload_cmd = ['sudo', '-u', real_user, str(pg_ctl_bin), '-D', str(pg_data_dir), 'reload']
-    elif pg_ctl_script.exists():
-        reload_cmd = ['sudo', '-u', real_user, str(pg_ctl_script), 'reload']
-    if not reload_cmd:
-        return False
-    result = run_command(reload_cmd, capture_output=True, check=False)
-    if result and result.returncode == 0:
-        print_success("PostgreSQL configuration reloaded")
-        return True
-    print_warning("PostgreSQL reload failed; continuing with existing session")
-    return False
-
-
-def cleanup_trust(pg_hba_conf: Path, trust_entries: list[tuple[str, str]]) -> bool:
-    """Remove temporary trust entries from pg_hba.conf."""
-    if not trust_entries or not pg_hba_conf.exists():
-        return True
-    try:
-        with open(pg_hba_conf, 'r') as f:
-            lines = f.readlines()
-        changed = False
-        for comment, line in trust_entries:
-            if comment in lines:
-                lines.remove(comment)
-                changed = True
-            if line in lines:
-                lines.remove(line)
-                changed = True
-        if changed:
-            with open(pg_hba_conf, 'w') as f:
-                f.writelines(lines)
-            print_success("Restored original authentication")
-        else:
-            print_info("Temporary trust entries already absent")
-        return True
-    except Exception as e:
-        print_error(f"Failed to restore pg_hba.conf: {e}")
-        return False
-
-
-def restart_alfresco_and_grant_privileges(alf_base_dir: str, pg_user: str, pg_password: str, pg_superuser: str = 'postgres', pg_database: str = 'postgres', db_os_user: Optional[str] = None) -> bool:
-    """Restart Alfresco and grant replication privileges."""
-    print_info("\n" + "="*60)
-    print_info("RESTARTING ALFRESCO")
-    print_info("="*60)
-    
-    config = load_env_config()
-    pg_host = config.get('PGHOST') or '127.0.0.1'
-    pg_port = str(config.get('PGPORT') or '5432')
-
-    alfresco_script = Path(alf_base_dir) / 'alfresco.sh'
-    
-    if not alfresco_script.exists():
-        print_error(f"Alfresco control script not found: {alfresco_script}")
-        return False
-    
-    print_info(f"Alfresco control script: {alfresco_script}")
-    
-    
-    print_warning("\nNote: Alfresco restart can be unpredictable:")
-    print_warning("  - May take a long time or appear to hang")
-    print_warning("  - If not stopped within 60 seconds, will be forcefully terminated")
-    print_warning("  - Script may have shell compatibility issues")
-    
-    if not ask_yes_no("\nAttempt automatic Alfresco restart?", default=True):
-        print_info("\nManual restart required:")
-        print_info(f"  bash {alf_base_dir}/alfresco.sh stop")
-        print_info(f"  bash {alf_base_dir}/alfresco.sh start")
-        print_info("\nAfter restarting, grant replication privilege:")
-        print_info(f"  sudo -u {db_os_user or real_user} {alf_base_dir}/postgresql/bin/psql -U {pg_superuser or pg_user} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\"")
-        print_warning("\nSetup will continue, but you must restart Alfresco manually")
-        return False
-    
-    import time
-    
-    # Run as the correct user (evadm) only
-    real_user, real_uid, real_gid = get_real_user()
-    
-    stop_commands = [
-        ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} stop'],
-    ]
-    
-    start_commands = [
-        ['sudo', '-u', real_user, 'bash', '-c', f'cd {alf_base_dir} && bash {alfresco_script} start'],
-    ]
-    
-    # Stop Alfresco with timeout
-    print_info("\nStopping Alfresco...")
-    stop_cmd = stop_commands[0]
-    print_info(f"Running: sudo -u {real_user} bash -c 'cd {alf_base_dir} && bash {alfresco_script} stop'")
-    print_info("Stop command timeout: 30 seconds")
-    
-    # Use timeout to prevent hanging
-    timeout_cmd = ['timeout', '30'] + stop_cmd
-    result = run_command(timeout_cmd, capture_output=True, check=False)
-    
-    if result and result.returncode == 0:
-        print_success("Alfresco stop command completed")
-    elif result and result.returncode == 124:
-        print_warning("Alfresco stop command timed out after 30 seconds - process may be stuck")
-    else:
-        print_warning("Alfresco stop command may have failed")
-        if result:
-            if result.stdout:
-                print_info(f"Output: {result.stdout.strip()}")
-            if result.stderr:
-                print_warning(f"Error: {result.stderr.strip()}")
-    
-    # Wait for processes to stop with timeout
-    print_info("Waiting for Alfresco processes to stop (timeout: 60 seconds)...")
-    timeout = 60
-    elapsed = 0
-    check_interval = 2
-    
-    # Start with a shorter timeout since stop command already had 30 seconds
-    remaining_timeout = 30
-    
-    while elapsed < remaining_timeout:
-        pid = find_alfresco_java_process(real_user, alf_base_dir)
-        if not pid:
-            print_success(f"Alfresco stopped successfully (after {elapsed} seconds)")
-            break
-        
-        time.sleep(check_interval)
-        elapsed += check_interval
-        
-        if elapsed % 10 == 0:
-            print_info(f"  Still waiting... ({elapsed}/{remaining_timeout} seconds)")
-    else:
-        # Timeout reached, force kill
-        print_warning(f"Alfresco did not stop gracefully after {remaining_timeout} seconds")
-        pid = find_alfresco_java_process(real_user, alf_base_dir)
-        if pid:
-            print_warning(f"Found Alfresco Java process (PID: {pid})")
-            if kill_alfresco_process(pid, real_user):
-                print_success(f"Sent SIGTERM to process {pid}")
-                time.sleep(5)  # Give it a few seconds to terminate
-                
-                # Check if it's still running
-                if find_alfresco_java_process(real_user, alf_base_dir):
-                    print_warning("Process still running after SIGTERM, may need manual intervention")
-                else:
-                    print_success("Process terminated successfully")
-            else:
-                print_error("Failed to send SIGTERM to process")
-        else:
-            print_success("Alfresco process not found (may have stopped)")
-    
-    # Additional wait to ensure cleanup
-    time.sleep(3)
-    
-    # Start Alfresco
-    print_info("\nStarting Alfresco...")
-    start_cmd = start_commands[0]
-    print_info(f"Running: sudo -u {real_user} bash -c 'cd {alf_base_dir} && bash {alfresco_script} start'")
-    
-    result = run_command(start_cmd, capture_output=True, check=False)
-    
-    if result and result.returncode == 0:
-        print_success("Alfresco started successfully")
-    else:
-        print_error("Alfresco start failed")
-        if result:
-            if result.stdout:
-                print_info(f"Output: {result.stdout.strip()}")
-            if result.stderr:
-                print_error(f"Error: {result.stderr.strip()}")
-        print_info("\nPlease restart Alfresco manually:")
-        print_info(f"  sudo -u {real_user} bash -c 'cd {alf_base_dir} && bash {alfresco_script} stop'")
-        print_info(f"  sudo -u {real_user} bash -c 'cd {alf_base_dir} && bash {alfresco_script} start'")
-        print_warning("\nContinuing setup without replication privilege grant...")
-        return False
-    
-    print_success("Alfresco restarted successfully")
-    
-    # Wait for PostgreSQL to be ready
-    print_info("Waiting for PostgreSQL to be ready...")
-    time.sleep(10)
-    
-    # Grant replication privileges
-    print_info("\n" + "="*60)
-    print_info("GRANTING REPLICATION PRIVILEGES")
-    print_info("="*60)
-    
-    print_info(f"Granting replication privilege to user: {pg_user}")
-    print_info(f"Note: This requires superuser access via role '{pg_superuser or pg_user}'")
-    
-    # Define paths and temporary trust configuration
-    pg_data_dir = Path(alf_base_dir) / "alf_data" / "postgresql"
-    pg_hba_conf = pg_data_dir / "pg_hba.conf"
-    pg_ctl_script = Path(alf_base_dir) / "postgresql" / "scripts" / "ctl.sh"
-    pg_ctl_bin = Path(alf_base_dir) / "postgresql" / "bin" / "pg_ctl"
-    psql_bin = Path(alf_base_dir) / "postgresql" / "bin" / "psql"
-    socket_dir = Path(alf_base_dir) / "postgresql" / "tmp"
-    socket_available = socket_dir.exists() and any(socket_dir.glob(".s.PGSQL.*"))
-    if socket_available:
-        host_args = ['-h', str(socket_dir), '-p', pg_port]
-    else:
-        host_args = ['-h', pg_host, '-p', pg_port]
-    requires_tcp_trust = not socket_available
-    if requires_tcp_trust:
-        print_info("PostgreSQL Unix socket not detected; applying temporary TCP trust for postgres user")
-    else:
-        print_info("PostgreSQL Unix socket detected; using socket connection for privilege grant")
-    effective_superuser = pg_superuser or pg_user
-
-    if not pg_hba_conf.exists():
-        print_error(f"PostgreSQL config file not found: {pg_hba_conf}")
-        return False
-
-    # Backup authentication file before modifications
-    backup_created = backup_file(pg_hba_conf)
-    if backup_created:
-        print_success(f"Backed up PostgreSQL authentication config: {pg_hba_conf}.backup")
-    else:
-        print_info("Using existing pg_hba.conf backup")
-
-    trust_entries = add_temporary_trust(pg_hba_conf, requires_tcp_trust)
-    reload_postgres_config(real_user, pg_ctl_bin, pg_ctl_script, pg_data_dir)
-
-    def restore_trust() -> bool:
-        nonlocal trust_entries
-        if not trust_entries:
-            return True
-        restored = cleanup_trust(pg_hba_conf, trust_entries)
-        if restored:
-            trust_entries = []
-            reload_postgres_config(real_user, pg_ctl_bin, pg_ctl_script, pg_data_dir)
-        return restored
-
-    if not psql_bin.exists():
-        print_error(f"PostgreSQL client not found: {psql_bin}")
-        restore_trust()
-        return False
-
-    superuser_check = ['sudo', '-u', db_os_user or real_user, str(psql_bin)] + host_args + [
-        '--dbname', pg_database,
-        '--username', effective_superuser,
-        '--tuples-only', '--no-align',
-        '--command', f"SELECT rolsuper FROM pg_roles WHERE rolname = '{effective_superuser}';"
-    ]
-    result = run_command(superuser_check, capture_output=True, check=False)
-    if not (result and result.returncode == 0 and result.stdout.strip() == 't'):
-        print_error(f"PostgreSQL role '{effective_superuser}' is not a superuser or cannot connect.")
-        print_error("Update PGSUPERUSER in .env to a valid PostgreSQL superuser and rerun the setup.")
-        restore_trust()
-        return False
-
-    check_cmd = ['sudo', '-u', db_os_user or real_user, str(psql_bin)] + host_args + [
-        '--dbname', pg_database,
-        '--username', effective_superuser,
-        '--tuples-only', '--no-align',
-        '--command', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"
-    ]
-    result = run_command(check_cmd, capture_output=True, check=False)
-    if result and result.returncode == 0 and result.stdout.strip() == 't':
-        print_success(f"User {pg_user} already has replication privileges")
-        restore_trust()
-        return True
-
-    print_info("Using embedded PostgreSQL approach:")
-    print_info(f"  PostgreSQL data directory: {pg_data_dir}")
-    print_info(f"  Authentication config: {pg_hba_conf}")
-
-    # Step 1: Back up pg_hba.conf
-    print_info("\n1. Backing up pg_hba.conf...")
-    print_info("Backup already created earlier in this step")
-
-    # Step 2: Add trust authentication
-    print_info("2. Adding trust authentication...")
-    if trust_entries:
-        print_info("Temporary trust entry for local connections configured")
-    else:
-        print_info("Trust authentication already present; no changes needed")
-
-    # Step 3: Restart PostgreSQL
-    print_info("3. Restarting PostgreSQL...")
-    restart_cmd = None
-
-    if pg_ctl_script.exists():
-        restart_cmd = ['sudo', '-u', real_user, str(pg_ctl_script), 'restart']
-        print_info(f"Using: {pg_ctl_script}")
-    elif pg_ctl_bin.exists():
-        restart_cmd = ['sudo', '-u', real_user, str(pg_ctl_bin), '-D', str(pg_data_dir), 'restart']
-        print_info(f"Using: {pg_ctl_bin}")
-    else:
-        print_error("No PostgreSQL control script found")
-        restore_trust()
-        return False
-
-    result = run_command(restart_cmd, capture_output=True, check=False)
-    if result and result.returncode == 0:
-        print_success("PostgreSQL restarted")
-    else:
-        print_warning("PostgreSQL restart may have failed")
-
-    # Step 4: Check if PostgreSQL role exists, create if needed
-    print_info("4. Checking if PostgreSQL role exists...")
-    check_role_cmd = ['sudo', '-u', db_os_user or real_user, str(psql_bin)] + host_args + [
-        '--dbname', pg_database,
-        '--username', effective_superuser,
-        '--tuples-only', '--command',
-        f"SELECT 1 FROM pg_roles WHERE rolname = '{pg_user}' LIMIT 1;"
-    ]
-    result = run_command(check_role_cmd, capture_output=True, check=False)
-    role_exists = result and result.returncode == 0 and '1' in result.stdout
-
-    if not role_exists:
-        print_warning(f"PostgreSQL role '{pg_user}' does not exist")
-        print_info(f"Creating PostgreSQL role '{pg_user}'...")
-
-        # Create the role with LOGIN and password
-        create_role_cmd = ['sudo', '-u', db_os_user or real_user, str(psql_bin)] + host_args + [
-            '--dbname', pg_database,
-            '--username', effective_superuser,
-            '--command', f"CREATE ROLE {pg_user} LOGIN PASSWORD '{pg_password}';"
-        ]
-        result = run_command(create_role_cmd, capture_output=True, check=False)
-        if result and result.returncode == 0:
-            print_success(f"PostgreSQL role '{pg_user}' created successfully")
-        else:
-            print_error(f"Failed to create PostgreSQL role '{pg_user}'")
-            restore_trust()
-            return False
-    else:
-        print_success(f"PostgreSQL role '{pg_user}' already exists")
-
-    # Step 5: Grant replication privileges
-    print_info("5. Granting replication privileges...")
-
-    # Connect as superuser with trust authentication
-    psql_cmd = ['sudo', '-u', db_os_user or real_user, str(psql_bin)] + host_args + [
-        '--dbname', pg_database,
-        '--username', effective_superuser,
-        '--command', f'ALTER USER {pg_user} WITH REPLICATION;'
-    ]
-
-    result = run_command(psql_cmd, capture_output=True, check=False)
-    if result and result.returncode == 0:
-        print_success("Replication privilege granted")
-    else:
-        print_error("Failed to grant replication privilege")
-        restore_trust()
-        return False
-
-    # Step 6: Verify privileges
-    print_info("6. Verifying privileges...")
-    verify_cmd = ['sudo', '-u', db_os_user or real_user, str(psql_bin)] + host_args + [
-        '--dbname', pg_database,
-        '--username', effective_superuser,
-        '--command', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"
-    ]
-
-    result = run_command(verify_cmd, capture_output=True, check=False)
-    if not (result and result.returncode == 0 and result.stdout.strip() == 't'):
-        print_error("Replication privilege verification failed")
-        restore_trust()
-        return False
-
-    # Step 7: Restore original authentication
-    print_info("7. Restoring original authentication...")
-    if not restore_trust():
-        return False
-
-    # Step 8: Final verification
-    print_info("8. Final verification...")
-    final_verify = ['sudo', '-u', db_os_user or real_user, str(psql_bin)] + host_args + [
-        '--dbname', pg_database,
-        '--username', effective_superuser,
-        '--command', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"
-    ]
-
-    result = run_command(final_verify, capture_output=True, check=False)
-    if result and result.returncode == 0 and result.stdout.strip() == 't':
-        print_success("✓ Replication privileges confirmed")
-        restore_trust()
-        return True
-    else:
-        print_error("Replication privileges could not be confirmed; please run the ALTER USER command manually.")
-        restore_trust()
-        return False
+    return True
 
 def create_virtual_environment():
     """Create Python virtual environment and install dependencies."""
@@ -1612,41 +1054,24 @@ def verify_installation():
         checks.append(False)
     
     # Check replication privilege
-    print_info("\n[4/8] Checking PostgreSQL replication privilege...")
-    pg_user = config.get('PGUSER', 'alfresco')
-    pg_superuser = config.get('PGSUPERUSER', 'postgres')
-    pg_host = config.get('PGHOST', 'localhost')
-    pg_port = config.get('PGPORT', '5432')
-    alf_base_dir = config.get('ALF_BASE_DIR', '/opt/alfresco')
-    pg_system_user = config.get('PG_SYSTEM_USER', get_real_user()[0])
-    os_postgres_check = run_command(['id', 'postgres'], capture_output=True, check=False)
-    if os_postgres_check and os_postgres_check.returncode == 0:
-        pg_system_user = 'postgres'
-    socket_dir = Path(alf_base_dir) / 'postgresql' / 'tmp'
-    host_args = ['-h', str(socket_dir)] if socket_dir.exists() else ['-h', pg_host, '-p', pg_port]
-    psql_path = Path(alf_base_dir) / 'postgresql' / 'bin' / 'psql'
-    psql_binary_str = str(psql_path)
-    manual_host = f"-h {socket_dir}" if socket_dir.exists() else f"-h {pg_host} -p {pg_port}"
-    manual_grant_cmd = f"sudo -u {pg_system_user} {psql_binary_str} {manual_host} -U {pg_superuser} -d postgres -c \"ALTER USER {pg_user} REPLICATION;\""
-    verify_cmd = ['sudo', '-u', pg_system_user, str(psql_path)] + host_args + ['-U', pg_user, '-d', 'postgres', '-t', '-A',
-                  '-c', f"SELECT rolreplication FROM pg_roles WHERE rolname = '{pg_user}';"]
-    
-    result = run_command(verify_cmd, capture_output=True, check=False)
-    if result and result.returncode == 0:
-        output = result.stdout.strip()
-        if output == 't':
-            print_success(f"Replication privilege granted to {pg_user}")
+    print_info("\n[4/8] Ensuring replication privilege (auto TCP fix)...")
+    pg_data_dir_path = Path(config.get('ALF_BASE_DIR', '/opt/alfresco')) / 'alf_data' / 'postgresql'
+    psql_binary = Path(config.get('ALF_BASE_DIR', '/opt/alfresco')) / 'postgresql' / 'bin' / 'psql'
+    pg_ctl_bin = Path(config.get('ALF_BASE_DIR', '/opt/alfresco')) / 'postgresql' / 'bin' / 'pg_ctl'
+
+    if psql_binary.exists() and pg_ctl_bin.exists() and pg_data_dir_path.exists():
+        if ensure_replication_privilege_for_alfresco(
+            str(pg_data_dir_path), str(psql_binary), str(pg_ctl_bin)
+        ):
+            print_success("Replication privilege confirmed and configuration cleaned up.")
             checks.append(True)
         else:
-            print_error(f"Replication privilege NOT granted to {pg_user}")
-            print_info(f"  Run this command using the PostgreSQL superuser:")
-            print_info(f"  {manual_grant_cmd}")
-            print_info(f"  (Update PGSUPERUSER in .env if this role fails to connect.)")
+            print_error("Automatic replication privilege setup failed.")
             checks.append(False)
+            return False
     else:
-        print_warning("Cannot verify replication privilege (PostgreSQL may not be running)")
-        warnings.append("Replication privilege could not be verified")
-        checks.append(True)  # Don't fail on this
+        print_error("Cannot locate PostgreSQL binaries or data directory for replication fix.")
+        checks.append(False)
     
     # Check virtual environment
     print_info("\n[5/8] Checking Python virtual environment...")
@@ -1791,6 +1216,86 @@ def main():
     print_header("Setup Complete!")
     print_info("Review the instructions above for PostgreSQL configuration.")
     print_info("See README.md for detailed documentation.")
+
+def ensure_replication_privilege_for_alfresco(
+    pg_data_dir: str, psql_bin: str, pg_ctl_bin: str
+):
+    """Ensure 'alfresco' user has REPLICATION privilege even in TCP-only mode."""
+    import shutil
+    import subprocess
+    import time
+
+    pg_hba = Path(pg_data_dir) / "pg_hba.conf"
+    if not pg_hba.exists():
+        print_error(f"pg_hba.conf not found at {pg_hba}")
+        return False
+
+    backup_file = pg_hba.with_suffix(f".bak.auto.{int(time.time())}")
+    shutil.copy2(pg_hba, backup_file)
+    print_success(f"Backed up pg_hba.conf → {backup_file}")
+
+    content = pg_hba.read_text().splitlines()
+    patched = []
+    inserted = False
+    for line in content:
+        if not inserted and "host" in line and "127.0.0.1/32" in line and "md5" in line:
+            patched.append("host    all             postgres        127.0.0.1/32            trust")
+            inserted = True
+        patched.append(line)
+    if not inserted:
+        patched.insert(0, "host    all             postgres        127.0.0.1/32            trust")
+
+    pg_hba.write_text("\n".join(patched) + "\n")
+    subprocess.run([pg_ctl_bin, "-D", pg_data_dir, "reload"], check=False)
+    print_info("PostgreSQL configuration reloaded with temporary trust rule.")
+
+    grant_cmd = [
+        psql_bin,
+        "-h",
+        "127.0.0.1",
+        "-U",
+        "postgres",
+        "-d",
+        "postgres",
+        "-c",
+        "ALTER USER alfresco WITH REPLICATION;",
+    ]
+    result = subprocess.run(grant_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print_error(f"Grant failed: {result.stderr.strip()}")
+        return False
+    print_success("ALTER USER executed successfully.")
+
+    verify_cmd = [
+        psql_bin,
+        "-h",
+        "127.0.0.1",
+        "-U",
+        "postgres",
+        "-d",
+        "postgres",
+        "-t",
+        "-A",
+        "-c",
+        "SELECT rolreplication FROM pg_roles WHERE rolname='alfresco';",
+    ]
+    verify = subprocess.run(verify_cmd, capture_output=True, text=True)
+    if verify.returncode == 0 and verify.stdout.strip() == "t":
+        print_success("Replication privilege verified (rolreplication = t).")
+    else:
+        print_error("Replication verification failed.")
+        print_info(verify.stdout.strip())
+        return False
+
+    cleaned = [
+        line
+        for line in patched
+        if "postgres        127.0.0.1/32            trust" not in line
+    ]
+    pg_hba.write_text("\n".join(cleaned) + "\n")
+    subprocess.run([pg_ctl_bin, "-D", pg_data_dir, "reload"], check=False)
+    print_success("Temporary trust rule removed, pg_hba.conf restored.")
+    return True
 
 if __name__ == '__main__':
     try:
