@@ -134,8 +134,150 @@ class AlfrescoRestore:
         self.config = config
         self.logger = logger
         
+    def start_alfresco_full(self) -> bool:
+        """Start all Alfresco services (including PostgreSQL)."""
+        self.logger.info("Starting all Alfresco services...")
+        
+        try:
+            result = subprocess.run(
+                ['sudo', '-u', self.config.alfresco_user, 
+                 str(self.config.alfresco_script), 'start'],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if result.returncode == 0:
+                self.logger.info("Alfresco services started successfully")
+                return True
+            else:
+                self.logger.warning(f"Start command output: {result.stdout}")
+                self.logger.warning(f"Start command error: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            self.logger.error("Alfresco start timed out")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error starting Alfresco: {e}")
+            return False
+    
+    def stop_tomcat_only(self) -> bool:
+        """Stop only Tomcat, leaving PostgreSQL running."""
+        self.logger.info("Stopping Tomcat only (PostgreSQL will remain running)...")
+        
+        try:
+            # Try to stop tomcat using alfresco.sh stop-tomcat or similar
+            # If that doesn't work, try to kill tomcat processes directly
+            result = subprocess.run(
+                ['sudo', '-u', self.config.alfresco_user, 
+                 str(self.config.alfresco_script), 'stop-tomcat'],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if result.returncode == 0:
+                self.logger.info("Tomcat stopped successfully")
+                return True
+            else:
+                # Fallback: try to stop tomcat by finding and killing the process
+                self.logger.info("Attempting alternative method to stop Tomcat...")
+                return self._stop_tomcat_process()
+                
+        except subprocess.TimeoutExpired:
+            self.logger.error("Tomcat stop timed out")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error stopping Tomcat: {e}")
+            return False
+    
+    def _stop_tomcat_process(self) -> bool:
+        """Stop Tomcat by finding and killing the Java process."""
+        try:
+            # Find tomcat process (java process with tomcat/alfresco in classpath)
+            result = subprocess.run(
+                ['pgrep', '-f', 'java.*tomcat|java.*alfresco.*tomcat'],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                pids = result.stdout.strip().split('\n')
+                for pid in pids:
+                    if pid:
+                        self.logger.info(f"Stopping Tomcat process {pid}")
+                        subprocess.run(['sudo', '-u', self.config.alfresco_user, 'kill', pid], check=False)
+                
+                # Wait a bit for processes to stop
+                import time
+                time.sleep(5)
+                
+                # Verify tomcat is stopped
+                result = subprocess.run(['pgrep', '-f', 'java.*tomcat|java.*alfresco.*tomcat'], capture_output=True)
+                if result.returncode != 0:
+                    self.logger.info("Tomcat stopped successfully")
+                    return True
+                else:
+                    self.logger.warning("Some Tomcat processes may still be running")
+                    return True
+            else:
+                self.logger.info("No Tomcat processes found (may already be stopped)")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Error stopping Tomcat process: {e}")
+            return False
+    
+    def verify_postgresql_running(self) -> bool:
+        """Verify that PostgreSQL is running and accepting connections."""
+        self.logger.info("Verifying PostgreSQL is running...")
+        
+        try:
+            # Try to connect to PostgreSQL using psql
+            import os
+            from dotenv import load_dotenv
+            load_dotenv()
+            
+            pg_host = os.getenv('PGHOST', 'localhost')
+            pg_port = os.getenv('PGPORT', '5432')
+            pg_user = os.getenv('PGUSER', 'alfresco')
+            pg_password = os.getenv('PGPASSWORD')
+            pg_database = os.getenv('PGDATABASE', 'postgres')
+            
+            # Use embedded psql if available
+            alf_base_path = Path(self.config.alf_base_dir) if isinstance(self.config.alf_base_dir, str) else self.config.alf_base_dir
+            embedded_psql = alf_base_path / 'postgresql' / 'bin' / 'psql'
+            if embedded_psql.exists():
+                psql_cmd = str(embedded_psql)
+            else:
+                psql_cmd = 'psql'
+            
+            env = os.environ.copy()
+            if pg_password:
+                env['PGPASSWORD'] = pg_password
+            
+            result = subprocess.run(
+                [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-c', 'SELECT 1;'],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                self.logger.info("PostgreSQL is running and accepting connections")
+                return True
+            else:
+                self.logger.error(f"PostgreSQL connection failed: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error verifying PostgreSQL: {e}")
+            return False
+    
     def stop_alfresco(self) -> bool:
-        """Stop Alfresco and PostgreSQL services."""
+        """Stop Alfresco and PostgreSQL services (legacy method, kept for compatibility)."""
         self.logger.info("Stopping Alfresco services...")
         
         try:
@@ -510,6 +652,36 @@ recovery_target_timeline = 'latest'
             self.logger.error(f"Invalid target time format: {target_time}")
             return None
     
+    def start_tomcat_only(self) -> bool:
+        """Start only Tomcat (PostgreSQL should already be running)."""
+        self.logger.info("Starting Tomcat only (PostgreSQL should already be running)...")
+        
+        try:
+            # Try to start tomcat using alfresco.sh start-tomcat or similar
+            result = subprocess.run(
+                ['sudo', '-u', self.config.alfresco_user, 
+                 str(self.config.alfresco_script), 'start-tomcat'],
+                capture_output=True,
+                text=True,
+                timeout=600
+            )
+            
+            if result.returncode == 0:
+                self.logger.info("Tomcat started successfully")
+                self.logger.info("Monitor startup with: tail -f {}/tomcat/logs/catalina.out".format(self.config.alf_base_dir))
+                return True
+            else:
+                # Fallback: use regular start (it should skip PostgreSQL if already running)
+                self.logger.info("Attempting to start via alfresco.sh start (PostgreSQL should remain running)...")
+                return self.start_alfresco()
+                
+        except subprocess.TimeoutExpired:
+            self.logger.error("Tomcat start timed out")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error starting Tomcat: {e}")
+            return False
+    
     def start_alfresco(self) -> bool:
         """Start Alfresco services."""
         self.logger.info("Starting Alfresco services...")
@@ -709,8 +881,9 @@ def main():
             logger.info(f"  PostgreSQL: {pg_timestamp}")
             logger.info(f"  Contentstore: {cs_timestamp}")
             logger.info("")
-            logger.warning("WARNING: This will stop Alfresco and replace current data!")
+            logger.warning("WARNING: This will replace current data!")
             logger.warning("Current data will be backed up automatically.")
+            logger.warning("PostgreSQL must be running for database restore.")
             logger.info("")
             
             confirm = input("Type 'RESTORE' to confirm: ").strip()
@@ -718,13 +891,33 @@ def main():
                 logger.info("Restore cancelled by user")
                 sys.exit(0)
             
-            logger.section("Stopping Alfresco")
-            if not restore.stop_alfresco():
-                logger.error("Failed to stop Alfresco")
+            # Step 1: Start all Alfresco services (including PostgreSQL)
+            logger.section("Starting Alfresco Services")
+            if not restore.start_alfresco_full():
+                logger.error("Failed to start Alfresco services")
                 sys.exit(1)
             
-            restore.verify_stopped()
+            # Step 2: Wait 2 minutes for services to fully start
+            logger.section("Waiting for Services to Start")
+            logger.info("Waiting 2 minutes for Alfresco services to fully initialize...")
+            import time
+            time.sleep(120)  # 2 minutes
+            logger.info("Wait completed")
             
+            # Step 3: Stop only Tomcat (PostgreSQL must remain running)
+            logger.section("Stopping Tomcat")
+            if not restore.stop_tomcat_only():
+                logger.error("Failed to stop Tomcat")
+                sys.exit(1)
+            
+            # Step 4: Verify PostgreSQL is running
+            logger.section("Verifying PostgreSQL")
+            if not restore.verify_postgresql_running():
+                logger.error("PostgreSQL is not running or not accepting connections")
+                logger.error("Cannot proceed with database restore")
+                sys.exit(1)
+            
+            # Step 5: Backup current data
             logger.section("Backing Up Current Data")
             success, backup_timestamp = restore.backup_current_data()
             if not success:
@@ -732,20 +925,23 @@ def main():
                 sys.exit(1)
             logger.info(f"Current data backed up with timestamp: {backup_timestamp}")
             
+            # Step 6: Restore PostgreSQL
             logger.section("Restoring PostgreSQL")
             if not restore.restore_postgres(pg_timestamp):
                 logger.error("PostgreSQL restore failed")
                 sys.exit(1)
             
+            # Step 7: Restore Contentstore
             logger.section("Restoring Contentstore")
             if not restore.restore_contentstore(cs_timestamp):
                 logger.error("Contentstore restore failed")
                 sys.exit(1)
             
-            logger.section("Starting Alfresco")
-            if not restore.start_alfresco():
-                logger.error("Failed to start Alfresco")
-                logger.info("Alfresco may need manual intervention to start")
+            # Step 8: Start Tomcat (PostgreSQL is already running)
+            logger.section("Starting Tomcat")
+            if not restore.start_tomcat_only():
+                logger.error("Failed to start Tomcat")
+                logger.info("Tomcat may need manual intervention to start")
             
             logger.section("Restore Complete")
             logger.info("Full system restore completed successfully!")
@@ -764,8 +960,84 @@ def main():
         
         elif restore_mode == 3:
             logger.section("PostgreSQL Only Restore")
-            logger.error("PostgreSQL-only mode not yet fully implemented")
-            sys.exit(1)
+            
+            pg_backups = restore.list_postgres_backups()
+            if not pg_backups:
+                logger.error("No PostgreSQL backups found")
+                sys.exit(1)
+            
+            pg_timestamp = select_backup(pg_backups, "PostgreSQL")
+            if not pg_timestamp:
+                logger.error("No backup selected")
+                sys.exit(1)
+            
+            if not restore.validate_postgres_backup(pg_timestamp):
+                logger.error("PostgreSQL backup validation failed")
+                sys.exit(1)
+            
+            logger.section("Restore Confirmation")
+            logger.info("About to restore PostgreSQL:")
+            logger.info(f"  PostgreSQL: {pg_timestamp}")
+            logger.info("")
+            logger.warning("WARNING: This will replace current PostgreSQL data!")
+            logger.warning("Current data will be backed up automatically.")
+            logger.warning("PostgreSQL must be running for database restore.")
+            logger.info("")
+            
+            confirm = input("Type 'RESTORE' to confirm: ").strip()
+            if confirm != 'RESTORE':
+                logger.info("Restore cancelled by user")
+                sys.exit(0)
+            
+            # Step 1: Start all Alfresco services (including PostgreSQL)
+            logger.section("Starting Alfresco Services")
+            if not restore.start_alfresco_full():
+                logger.error("Failed to start Alfresco services")
+                sys.exit(1)
+            
+            # Step 2: Wait 2 minutes for services to fully start
+            logger.section("Waiting for Services to Start")
+            logger.info("Waiting 2 minutes for Alfresco services to fully initialize...")
+            import time
+            time.sleep(120)  # 2 minutes
+            logger.info("Wait completed")
+            
+            # Step 3: Stop only Tomcat (PostgreSQL must remain running)
+            logger.section("Stopping Tomcat")
+            if not restore.stop_tomcat_only():
+                logger.error("Failed to stop Tomcat")
+                sys.exit(1)
+            
+            # Step 4: Verify PostgreSQL is running
+            logger.section("Verifying PostgreSQL")
+            if not restore.verify_postgresql_running():
+                logger.error("PostgreSQL is not running or not accepting connections")
+                logger.error("Cannot proceed with database restore")
+                sys.exit(1)
+            
+            # Step 5: Backup current data
+            logger.section("Backing Up Current Data")
+            success, backup_timestamp = restore.backup_current_data()
+            if not success:
+                logger.error("Failed to backup current data")
+                sys.exit(1)
+            logger.info(f"Current data backed up with timestamp: {backup_timestamp}")
+            
+            # Step 6: Restore PostgreSQL
+            logger.section("Restoring PostgreSQL")
+            if not restore.restore_postgres(pg_timestamp):
+                logger.error("PostgreSQL restore failed")
+                sys.exit(1)
+            
+            # Step 7: Start Tomcat (PostgreSQL is already running)
+            logger.section("Starting Tomcat")
+            if not restore.start_tomcat_only():
+                logger.error("Failed to start Tomcat")
+                logger.info("Tomcat may need manual intervention to start")
+            
+            logger.section("Restore Complete")
+            logger.info("PostgreSQL restore completed successfully!")
+            logger.info(f"Backup log: {log_file}")
         
         elif restore_mode == 4:
             logger.section("Contentstore Only Restore")
