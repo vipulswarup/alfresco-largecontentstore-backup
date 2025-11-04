@@ -14,7 +14,7 @@ def backup_postgres(config):
     """
     Execute PostgreSQL backup using pg_dump to create a SQL dump file.
     
-    Returns dict with keys: success, path, error, duration, start_time
+    Returns dict with keys: success, path, error, duration, start_time, size_uncompressed_mb, size_compressed_mb
     """
     start_time = datetime.now()
     timestamp_str = start_time.strftime('%Y-%m-%d_%H-%M-%S')
@@ -23,13 +23,16 @@ def backup_postgres(config):
     postgres_dir.mkdir(parents=True, exist_ok=True)
     
     backup_file = postgres_dir / f'postgres-{timestamp_str}.sql.gz'
+    temp_uncompressed = postgres_dir / f'postgres-{timestamp_str}.sql.tmp'
     
     result = {
         'success': False,
         'path': str(backup_file),
         'error': None,
         'duration': 0,
-        'start_time': start_time.isoformat()
+        'start_time': start_time.isoformat(),
+        'size_uncompressed_mb': 0,
+        'size_compressed_mb': 0
     }
     
     # Validate backup path
@@ -70,49 +73,68 @@ def backup_postgres(config):
         '--no-acl',  # Skip access privileges
     ]
     
-    # Run pg_dump and pipe to gzip
+    # Run pg_dump first to temporary file to get uncompressed size
     try:
-        # Open output file for writing
-        with open(backup_file, 'wb') as out_file:
-            # Start pg_dump process
+        # Step 1: Create uncompressed dump to measure size
+        with open(temp_uncompressed, 'wb') as out_file:
             pg_dump_process = subprocess.Popen(
                 pg_dump_cmd_list,
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            
-            # Start gzip process
-            gzip_process = subprocess.Popen(
-                ['gzip'],
-                stdin=pg_dump_process.stdout,
                 stdout=out_file,
                 stderr=subprocess.PIPE
             )
             
-            # Close pg_dump's stdout to allow it to receive SIGPIPE if gzip fails
-            pg_dump_process.stdout.close()
+            pg_dump_stderr = pg_dump_process.communicate()[1]
             
-            # Wait for both processes
-            pg_dump_stdout, pg_dump_stderr = pg_dump_process.communicate()
-            gzip_stdout, gzip_stderr = gzip_process.communicate()
-            
-            # Check results
             if pg_dump_process.returncode != 0:
                 error_msg = pg_dump_stderr.decode('utf-8', errors='replace') if pg_dump_stderr else 'Unknown error'
                 result['error'] = f"pg_dump failed with exit code {pg_dump_process.returncode}: {error_msg}"
-                # Clean up partial file
-                if backup_file.exists():
-                    backup_file.unlink()
+                if temp_uncompressed.exists():
+                    temp_uncompressed.unlink()
                 return result
-            
-            if gzip_process.returncode != 0:
-                error_msg = gzip_stderr.decode('utf-8', errors='replace') if gzip_stderr else 'Unknown error'
-                result['error'] = f"gzip failed with exit code {gzip_process.returncode}: {error_msg}"
-                # Clean up partial file
-                if backup_file.exists():
-                    backup_file.unlink()
-                return result
+        
+        # Get uncompressed size
+        if temp_uncompressed.exists():
+            uncompressed_size = temp_uncompressed.stat().st_size
+            result['size_uncompressed_mb'] = uncompressed_size / (1024 * 1024)
+        else:
+            result['error'] = "pg_dump completed but no output file was created"
+            return result
+        
+        # Step 2: Compress the dump file
+        with open(temp_uncompressed, 'rb') as in_file:
+            with open(backup_file, 'wb') as out_file:
+                gzip_process = subprocess.Popen(
+                    ['gzip', '-c'],
+                    stdin=in_file,
+                    stdout=out_file,
+                    stderr=subprocess.PIPE
+                )
+                
+                gzip_stderr = gzip_process.communicate()[1]
+                
+                if gzip_process.returncode != 0:
+                    error_msg = gzip_stderr.decode('utf-8', errors='replace') if gzip_stderr else 'Unknown error'
+                    result['error'] = f"gzip failed with exit code {gzip_process.returncode}: {error_msg}"
+                    if backup_file.exists():
+                        backup_file.unlink()
+                    if temp_uncompressed.exists():
+                        temp_uncompressed.unlink()
+                    return result
+        
+        # Get compressed size
+        if backup_file.exists():
+            compressed_size = backup_file.stat().st_size
+            result['size_compressed_mb'] = compressed_size / (1024 * 1024)
+        else:
+            result['error'] = "gzip completed but no compressed file was created"
+            if temp_uncompressed.exists():
+                temp_uncompressed.unlink()
+            return result
+        
+        # Clean up temporary uncompressed file
+        if temp_uncompressed.exists():
+            temp_uncompressed.unlink()
         
         # Verify backup file was created and has content
         if backup_file.exists() and backup_file.stat().st_size > 1024:  # At least 1KB

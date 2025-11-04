@@ -91,6 +91,27 @@ def main():
                     logging.info(f"PostgreSQL backup completed successfully")
                     logging.info(f"  Path: {pg_result['path']}")
                     logging.info(f"  Duration: {pg_result['duration']:.2f} seconds")
+                    
+                    # Display size information
+                    uncompressed_mb = pg_result.get('size_uncompressed_mb', 0)
+                    compressed_mb = pg_result.get('size_compressed_mb', 0)
+                    
+                    if uncompressed_mb > 0:
+                        if uncompressed_mb >= 1024:
+                            logging.info(f"  Uncompressed size: {uncompressed_mb/1024:.2f} GB")
+                        else:
+                            logging.info(f"  Uncompressed size: {uncompressed_mb:.2f} MB")
+                    
+                    if compressed_mb > 0:
+                        if compressed_mb >= 1024:
+                            logging.info(f"  Compressed size: {compressed_mb/1024:.2f} GB")
+                        else:
+                            logging.info(f"  Compressed size: {compressed_mb:.2f} MB")
+                        
+                        if uncompressed_mb > 0 and compressed_mb > 0:
+                            compression_ratio = (1 - compressed_mb / uncompressed_mb) * 100
+                            logging.info(f"  Compression ratio: {compression_ratio:.1f}%")
+                    
                     if 'warning' in pg_result:
                         logging.warning(f"  Warning: {pg_result['warning']}")
                 else:
@@ -108,6 +129,24 @@ def main():
                     logging.info(f"Contentstore backup completed successfully")
                     logging.info(f"  Path: {cs_result['path']}")
                     logging.info(f"  Duration: {cs_result['duration']:.2f} seconds")
+                    
+                    # Display size information
+                    total_mb = cs_result.get('total_size_mb', 0)
+                    additional_mb = cs_result.get('additional_size_mb', 0)
+                    
+                    if total_mb > 0:
+                        if total_mb >= 1024:
+                            logging.info(f"  Total backup size: {total_mb/1024:.2f} GB")
+                        else:
+                            logging.info(f"  Total backup size: {total_mb:.2f} MB")
+                    
+                    if additional_mb > 0:
+                        if additional_mb >= 1024:
+                            logging.info(f"  Additional data backed up: {additional_mb/1024:.2f} GB")
+                        else:
+                            logging.info(f"  Additional data backed up: {additional_mb:.2f} MB")
+                    else:
+                        logging.info(f"  Additional data backed up: 0 MB (all files hardlinked from previous backup)")
                 else:
                     logging.error(f"Contentstore backup FAILED")
                     logging.error(f"  Error: {cs_result['error']}")

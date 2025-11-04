@@ -1,5 +1,6 @@
 """Contentstore backup using rsync with hardlink optimization."""
 
+import os
 from datetime import datetime
 from pathlib import Path
 try:
@@ -8,11 +9,25 @@ except ImportError:  # pragma: no cover
     from ..utils.subprocess_utils import SubprocessRunner, validate_path
 
 
+def get_directory_size(path):
+    """Calculate total size of directory in bytes."""
+    total_size = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(path):
+            for filename in filenames:
+                filepath = os.path.join(dirpath, filename)
+                if os.path.exists(filepath):
+                    total_size += os.path.getsize(filepath)
+    except Exception:
+        pass
+    return total_size
+
+
 def backup_contentstore(config):
     """
     Execute contentstore backup using rsync with hardlink strategy.
     
-    Returns dict with keys: success, path, error, duration, start_time
+    Returns dict with keys: success, path, error, duration, start_time, total_size_mb, additional_size_mb
     """
     start_time = datetime.now()
     timestamp_str = start_time.strftime('%Y-%m-%d_%H-%M-%S')
@@ -29,7 +44,9 @@ def backup_contentstore(config):
         'path': str(destination),
         'error': None,
         'duration': 0,
-        'start_time': start_time.isoformat()
+        'start_time': start_time.isoformat(),
+        'total_size_mb': 0,
+        'additional_size_mb': 0
     }
     
     # Validate paths
@@ -40,11 +57,22 @@ def backup_contentstore(config):
         result['error'] = f"Invalid path: {e}"
         return result
     
-    # Build rsync command
+    # Calculate size of previous backup if it exists (for fallback calculation)
+    previous_backup_size = 0
+    if last_link.exists() and last_link.is_symlink():
+        try:
+            previous_backup_path = last_link.resolve()
+            if previous_backup_path.exists():
+                previous_backup_size = get_directory_size(previous_backup_path)
+        except Exception:
+            pass
+    
+    # Build rsync command with stats output
     cmd = [
         'rsync',
         '-a',           # archive mode
         '--delete',     # delete files in dest that don't exist in source
+        '--stats',      # print statistics
     ]
     
     # Add hardlink optimization if previous backup exists
@@ -56,9 +84,37 @@ def backup_contentstore(config):
     
     # Use common subprocess runner
     runner = SubprocessRunner(timeout=28800)  # 8 hour timeout for large contentstore
-    subprocess_result = runner.run_command(cmd)
+    subprocess_result = runner.run_command(cmd, capture_output=True)
     
     if subprocess_result['success']:
+        # Calculate backup sizes
+        if destination.exists():
+            total_size = get_directory_size(destination)
+            result['total_size_mb'] = total_size / (1024 * 1024)
+            
+            # Parse rsync stats to get actual transferred size
+            # Look for "Total transferred file size" in rsync output
+            additional_size = 0
+            if subprocess_result.get('stdout'):
+                output = subprocess_result['stdout']
+                for line in output.split('\n'):
+                    if 'Total transferred file size:' in line:
+                        try:
+                            # Extract size from line like "Total transferred file size: 1,234,567 bytes"
+                            size_str = line.split('Total transferred file size:')[1].split('bytes')[0].strip().replace(',', '')
+                            additional_size = int(size_str)
+                            break
+                        except (ValueError, IndexError):
+                            pass
+            
+            # If we couldn't parse rsync stats, use a fallback calculation
+            if additional_size == 0:
+                # Estimate: difference between current and previous backup sizes
+                # This is an approximation - actual disk usage is less due to hardlinks
+                additional_size = max(0, total_size - previous_backup_size)
+            
+            result['additional_size_mb'] = additional_size / (1024 * 1024)
+        
         # Update the 'last' symlink to point to current backup
         try:
             if last_link.exists() or last_link.is_symlink():
