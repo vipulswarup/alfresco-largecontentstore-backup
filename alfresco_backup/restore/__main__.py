@@ -345,6 +345,12 @@ class AlfrescoRestore:
                 # Read output from psql (this will block until complete)
                 stdout, stderr = psql_process.communicate()
                 
+                # Read gunzip's stderr (it's a file-like object, need to read it)
+                gunzip_stderr = b''
+                if gunzip_process.stderr:
+                    gunzip_stderr = gunzip_process.stderr.read()
+                    gunzip_process.stderr.close()
+                
                 # Wait for gunzip to finish
                 gunzip_process.wait()
                 
@@ -353,7 +359,7 @@ class AlfrescoRestore:
             
             # Check results
             if gunzip_process.returncode != 0:
-                error_msg = gunzip_process.stderr.decode('utf-8', errors='replace') if gunzip_process.stderr else 'Unknown error'
+                error_msg = gunzip_stderr.decode('utf-8', errors='replace') if gunzip_stderr else 'Unknown error'
                 self.logger.error(f"gunzip failed with exit code {gunzip_process.returncode}: {error_msg}")
                 return False
             
