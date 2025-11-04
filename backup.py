@@ -54,13 +54,27 @@ def ensure_venv():
 
 if __name__ == '__main__':
     # Try to ensure venv is available
+    script_dir = Path(__file__).parent.absolute()
+    venv_path = script_dir / 'venv'
+    
     if not ensure_venv():
         print("ERROR: Virtual environment not found or not activated.")
-        print("\nPlease activate the virtual environment first:")
-        print("  source venv/bin/activate")
-        print("  python backup.py")
-        print("\nOr run the backup script using the venv Python directly:")
-        print("  venv/bin/python backup.py")
+        
+        if not venv_path.exists():
+            print("\nNo virtual environment found. You need to run setup first:")
+            print("  python3 setup.py")
+            print("\nThis will create the virtual environment and install dependencies.")
+        else:
+            print("\nVirtual environment exists but dependencies may not be installed.")
+            print("\nPlease activate the virtual environment first:")
+            print("  source venv/bin/activate")
+            print("  python backup.py")
+            print("\nOr run the backup script using the venv Python directly:")
+            print("  venv/bin/python backup.py")
+            print("\nIf dependencies are missing, install them:")
+            print("  source venv/bin/activate")
+            print("  pip install -r requirements.txt")
+        
         sys.exit(1)
     
     try:
