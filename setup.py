@@ -102,18 +102,26 @@ def run_command(cmd: list, capture_output: bool = False, check: bool = True) -> 
         print_error(f"Error running command: {e}")
         return None
 
-def check_prerequisites():
+def check_prerequisites(for_restore=False):
     """Check if required tools are installed."""
-    print_header("Step 1: Checking Prerequisites")
+    if not for_restore:
+        print_header("Step 1: Checking Prerequisites")
     
     print_info("Checking for required tools...")
     
-    required_tools = {
-        'python3': 'Python 3',
-        'pg_basebackup': 'PostgreSQL client tools',
-        'rsync': 'rsync',
-        'sudo': 'sudo'
-    }
+    if for_restore:
+        # For restore, only need Python and basic tools
+        required_tools = {
+            'python3': 'Python 3',
+        }
+    else:
+        # For backup setup, need all tools
+        required_tools = {
+            'python3': 'Python 3',
+            'pg_basebackup': 'PostgreSQL client tools',
+            'rsync': 'rsync',
+            'sudo': 'sudo'
+        }
     
     missing_tools = []
     for cmd, name in required_tools.items():
@@ -126,13 +134,20 @@ def check_prerequisites():
     
     if missing_tools:
         print_error(f"\nMissing required tools: {', '.join(missing_tools)}")
-        print_info("\nInstall them with:")
-        print("  sudo apt-get update")
-        print("  sudo apt-get install -y python3 python3-pip python3-venv postgresql-client rsync")
+        if not for_restore:
+            print_info("\nInstall them with:")
+            print("  sudo apt-get update")
+            print("  sudo apt-get install -y python3 python3-pip python3-venv postgresql-client rsync")
+        else:
+            print_info("\nInstall Python 3 with:")
+            print("  sudo apt-get update")
+            print("  sudo apt-get install -y python3 python3-pip python3-venv")
         sys.exit(1)
     
     print_success("\nAll prerequisites are installed!")
-    return ask_yes_no("\nContinue with setup?")
+    if not for_restore:
+        return ask_yes_no("\nContinue with setup?")
+    return True
 
 def create_env_file():
     """Create or verify .env file."""
@@ -1125,8 +1140,56 @@ def verify_installation():
         print_error("\n✗ Some critical checks failed. Please review the errors above.")
         return False
 
+def setup_restore_only():
+    """Simplified setup flow for restore operations only."""
+    print_header("Alfresco Restore System - Quick Setup")
+    
+    real_user, real_uid, real_gid = get_real_user()
+    running_as_root = is_running_as_root()
+    
+    if running_as_root:
+        print_info(f"Running with sudo privileges (real user: {real_user})")
+        print_info("All files and directories will be owned by the real user.")
+    else:
+        print_info(f"Running as user: {real_user}")
+    
+    print_info("\nThis simplified setup will:")
+    print_info("  1. Check prerequisites (Python 3)")
+    print_info("  2. Create a Python virtual environment")
+    print_info("  3. Install required dependencies")
+    print_info("\nThe restore script will prompt for backup location and target when run.\n")
+    
+    if not ask_yes_no("Start restore setup?"):
+        print_info("Setup canceled.")
+        sys.exit(0)
+    
+    # Check prerequisites (simplified for restore)
+    if not check_prerequisites(for_restore=True):
+        print_info("Setup canceled.")
+        sys.exit(0)
+    
+    # Create virtual environment
+    print_header("Create Virtual Environment")
+    if not create_virtual_environment():
+        print_error("Failed to create virtual environment")
+        sys.exit(1)
+    
+    print_header("Restore Setup Complete!")
+    print_info("\n✓ Virtual environment created and dependencies installed")
+    print_info("\nYou can now run the restore script:")
+    print_info("  python restore.py")
+    print_info("\nThe restore script will prompt you for:")
+    print_info("  - Backup directory location")
+    print_info("  - Alfresco installation directory (target)")
+    print_info("\nSee docs/operations/restore-runbook.md for detailed restore procedures.")
+
 def main():
     """Main setup flow."""
+    # Check if restore-only mode requested
+    if len(sys.argv) > 1 and sys.argv[1] in ['--restore', '-r', 'restore']:
+        setup_restore_only()
+        return
+    
     print_header("Alfresco Large Content Store Backup - Setup Wizard")
     
     real_user, real_uid, real_gid = get_real_user()
@@ -1140,7 +1203,8 @@ def main():
         print_info("You may be prompted for sudo password when creating directories.")
     
     print_info("\nThis wizard will guide you through setting up the backup system.")
-    print_info("You will be asked for permission before each step.\n")
+    print_info("You will be asked for permission before each step.")
+    print_info("\nFor restore-only setup (simplified), use: python3 setup.py --restore\n")
     
     if not ask_yes_no("Start setup?"):
         print_info("Setup canceled.")

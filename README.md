@@ -12,10 +12,22 @@ Python-based backup and restore tooling for Alfresco deployments, including Post
 
 ## Quick Start
 
+### For Backup System Setup
+
 ```bash
 git clone https://github.com/YOUR_USERNAME/alfresco-largecontentstore-backup.git
 cd alfresco-largecontentstore-backup
-sudo python3 setup.py   # Runs the guided installer
+sudo python3 setup.py   # Full setup wizard (includes .env, directories, cron)
+```
+
+### For Restore Operations Only
+
+If you only need to restore backups (no backup configuration needed):
+
+```bash
+git clone https://github.com/YOUR_USERNAME/alfresco-largecontentstore-backup.git
+cd alfresco-largecontentstore-backup
+python3 setup.py --restore   # Quick setup (just venv and dependencies)
 ```
 
 After installation, schedule the backup script or run it manually:
