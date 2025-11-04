@@ -84,7 +84,7 @@ def backup_contentstore(config):
     
     # Use common subprocess runner
     runner = SubprocessRunner(timeout=28800)  # 8 hour timeout for large contentstore
-    subprocess_result = runner.run_command(cmd, capture_output=True)
+    subprocess_result = runner.run_command(cmd)
     
     if subprocess_result['success']:
         # Calculate backup sizes
