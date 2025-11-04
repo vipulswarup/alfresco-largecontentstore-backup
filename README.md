@@ -21,6 +21,11 @@ sudo python3 setup.py   # Runs the guided installer
 After installation, schedule the backup script or run it manually:
 
 ```bash
+# The scripts automatically detect and use the local venv if it exists
+python backup.py
+
+# Or activate the venv manually (also works)
+source venv/bin/activate
 python backup.py
 ```
 

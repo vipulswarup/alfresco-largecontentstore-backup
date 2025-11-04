@@ -4,13 +4,17 @@ This document covers day-to-day backup execution, scheduling, retention, and mon
 
 ## Running Backups Manually
 
-Activate the project virtual environment (if created) and run the wrapper script:
+Run the backup script. The script automatically detects and uses the local virtual environment if it exists:
 
 ```bash
 cd /opt/alfresco-largecontentstore-backup
-source venv/bin/activate
+# Automatic venv detection (recommended)
 python backup.py            # Uses .env in the current directory
 python backup.py /path/to/custom.env  # Optional override
+
+# Or activate the venv manually (also works)
+source venv/bin/activate
+python backup.py
 ```
 
 During execution the orchestrator:

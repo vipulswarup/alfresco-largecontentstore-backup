@@ -79,7 +79,8 @@ Confirm that the SQL dump file exists and the contentstore directory contains da
    
    # Use the automated restore script (recommended)
    cd /path/to/alfresco-largecontentstore-backup
-   source venv/bin/activate
+   # The restore script automatically detects and uses the local venv if it exists
+   # Or activate manually: source venv/bin/activate
    python restore.py
    # Select option 3 (PostgreSQL only) and follow prompts
    

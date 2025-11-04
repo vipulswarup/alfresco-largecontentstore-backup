@@ -18,6 +18,7 @@ cd $ALF_BASE_DIR && ./alfresco.sh stop
 
 # Use automated restore script (recommended)
 cd /path/to/alfresco-largecontentstore-backup
+# Scripts automatically detect venv, or activate manually:
 source venv/bin/activate
 python restore.py
 # Select option 1 (Full system restore)
@@ -42,6 +43,7 @@ cd $ALF_BASE_DIR && ./alfresco.sh stop
 
 # Use automated restore script (recommended)
 cd /path/to/alfresco-largecontentstore-backup
+# Scripts automatically detect venv, or activate manually:
 source venv/bin/activate
 python restore.py
 # Select option 3 (PostgreSQL only)
