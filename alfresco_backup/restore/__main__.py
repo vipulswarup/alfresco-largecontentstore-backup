@@ -45,7 +45,8 @@ class RestoreConfig:
     """Configuration for restore operations."""
     
     def __init__(self):
-        self.alfresco_user = 'evadm'
+        # Default to current user, will be overridden by .env or prompt
+        self.alfresco_user = os.environ.get('USER', os.environ.get('USERNAME', 'alfresco'))
         self.backup_dir = None
         self.alf_base_dir = None
         self.postgres_data_dir = None
@@ -64,7 +65,9 @@ class RestoreConfig:
             errors.append(f"Alfresco base directory does not exist: {self.alf_base_dir}")
         
         if self.alf_base_dir:
-            pg_root = Path(self.alf_base_dir) / 'alf_data' / 'postgresql'
+            # Ensure alf_base_dir is a Path object
+            alf_base_path = Path(self.alf_base_dir) if isinstance(self.alf_base_dir, str) else self.alf_base_dir
+            pg_root = alf_base_path / 'alf_data' / 'postgresql'
             pg_data_candidate = pg_root / 'data'
             if (pg_root / 'PG_VERSION').exists():
                 self.postgres_data_dir = pg_root
@@ -73,8 +76,8 @@ class RestoreConfig:
             else:
                 self.postgres_data_dir = pg_root
 
-            self.contentstore_dir = Path(self.alf_base_dir) / 'alf_data' / 'contentstore'
-            self.alfresco_script = Path(self.alf_base_dir) / 'alfresco.sh'
+            self.contentstore_dir = alf_base_path / 'alf_data' / 'contentstore'
+            self.alfresco_script = alf_base_path / 'alfresco.sh'
             
             if not self.alfresco_script.exists():
                 errors.append(f"Alfresco control script not found: {self.alfresco_script}")
@@ -112,8 +115,11 @@ class RestoreLogger:
     def warning(self, message: str):
         self.logger.warning(message)
     
-    def error(self, message: str):
-        self.logger.error(message)
+    def error(self, message: str, exc_info=None):
+        if exc_info:
+            self.logger.error(message, exc_info=exc_info)
+        else:
+            self.logger.error(message)
     
     def section(self, title: str):
         separator = "=" * 80
@@ -296,7 +302,9 @@ class AlfrescoRestore:
             return False
         
         # Use embedded PostgreSQL tools if available
-        embedded_psql = self.config.alf_base_dir / 'postgresql' / 'bin' / 'psql'
+        # Ensure alf_base_dir is a Path object
+        alf_base_path = Path(self.config.alf_base_dir) if isinstance(self.config.alf_base_dir, str) else self.config.alf_base_dir
+        embedded_psql = alf_base_path / 'postgresql' / 'bin' / 'psql'
         if embedded_psql.exists():
             psql_cmd = str(embedded_psql)
             self.logger.info(f"Using embedded psql: {psql_cmd}")
@@ -521,9 +529,35 @@ def ask_question(prompt: str, default: Optional[str] = None) -> str:
             return default
         print("This field is required. Please enter a value.")
 def get_config() -> RestoreConfig:
-    """Interactively collect restore configuration from user."""
+    """Load restore configuration from .env file or interactively collect from user."""
     config = RestoreConfig()
     
+    # Try to load from .env file first
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        backup_dir = os.getenv('BACKUP_DIR')
+        alf_base_dir = os.getenv('ALF_BASE_DIR')
+        alfresco_user = os.getenv('ALFRESCO_USER')
+        
+        if backup_dir and alf_base_dir:
+            # Validate paths exist
+            if Path(backup_dir).exists() and Path(alf_base_dir).exists():
+                config.backup_dir = backup_dir
+                config.alf_base_dir = Path(alf_base_dir)
+                config.alfresco_user = alfresco_user or config.alfresco_user
+                config.restore_log_dir = str(Path.cwd())
+                print("\nConfiguration loaded from .env file")
+                return config
+            else:
+                print("\nWarning: .env file found but paths are invalid, prompting for configuration...")
+    except ImportError:
+        pass  # dotenv not available, continue with interactive
+    except Exception as e:
+        print(f"\nWarning: Could not load .env file: {e}, prompting for configuration...")
+    
+    # Fall back to interactive configuration
     print("\n" + "=" * 80)
     print("  Alfresco Restore Configuration")
     print("=" * 80)
@@ -538,8 +572,9 @@ def get_config() -> RestoreConfig:
     
     while True:
         alf_base = ask_question("Alfresco base directory (ALF_BASE_DIR)")
-        if Path(alf_base).exists():
-            config.alf_base_dir = alf_base
+        alf_base_path = Path(alf_base)
+        if alf_base_path.exists():
+            config.alf_base_dir = alf_base_path
             break
         print(f"Error: Directory does not exist: {alf_base}\n")
     

@@ -1141,22 +1141,24 @@ def verify_installation():
         return False
 
 def create_restore_env_file():
-    """Create minimal .env file for restore operations with PostgreSQL credentials."""
-    print_header("PostgreSQL Configuration for Restore")
+    """Create .env file for restore operations with all required configuration."""
+    print_header("Restore Configuration")
     
     env_file = Path('.env')
     
     if env_file.exists():
         print_info(f".env file already exists at: {env_file.absolute()}")
-        if not ask_yes_no("Do you want to update it with restore credentials?", default=False):
+        if not ask_yes_no("Do you want to update it with restore configuration?", default=False):
             return True
     
-    print_info("\nThe restore script needs PostgreSQL connection details to restore database backups.")
-    print_info("You need to provide:")
-    print_info("  - PostgreSQL host, port, user, password, and database name")
+    print_info("\nThe restore script needs the following information:")
+    print_info("  - PostgreSQL connection details (host, port, user, password, database)")
+    print_info("  - Backup directory location (where backups are stored)")
+    print_info("  - Alfresco base directory (target for restore)")
+    print_info("  - Alfresco OS user (for file ownership)")
     
-    if not ask_yes_no("\nConfigure PostgreSQL credentials now?"):
-        print_warning("Skipping .env creation. Restore will fail without PostgreSQL credentials.")
+    if not ask_yes_no("\nConfigure restore settings now?"):
+        print_warning("Skipping .env creation. Restore will fail without configuration.")
         return False
     
     # Collect PostgreSQL configuration
@@ -1171,13 +1173,42 @@ def create_restore_env_file():
         print_error("PostgreSQL password is required for restore operations")
         return False
     
-    # Write minimal .env file for restore
-    env_content = f"""# PostgreSQL Configuration (for restore operations)
+    # Collect path configuration
+    print_info("\n--- Path Configuration ---")
+    while True:
+        backup_dir = input(f"{Colors.OKCYAN}Backup directory path: {Colors.ENDC}").strip()
+        if backup_dir and Path(backup_dir).exists():
+            break
+        print_error(f"Directory does not exist: {backup_dir}")
+        print_info("Please enter a valid backup directory path.")
+    
+    while True:
+        alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory path: {Colors.ENDC}").strip()
+        if alf_base_dir and Path(alf_base_dir).exists():
+            break
+        print_error(f"Directory does not exist: {alf_base_dir}")
+        print_info("Please enter a valid Alfresco base directory path.")
+    
+    # Collect Alfresco user
+    real_user, real_uid, real_gid = get_real_user()
+    print_info("\n--- Alfresco OS User ---")
+    alfresco_user = input(f"{Colors.OKCYAN}Alfresco OS user [{real_user}]: {Colors.ENDC}").strip() or real_user
+    
+    # Write .env file for restore
+    env_content = f"""# Restore Configuration
+# PostgreSQL Configuration
 PGHOST={pg_host}
 PGPORT={pg_port}
 PGUSER={pg_user}
 PGPASSWORD={pg_password}
 PGDATABASE={pg_database}
+
+# Path Configuration
+BACKUP_DIR={backup_dir}
+ALF_BASE_DIR={alf_base_dir}
+
+# Alfresco OS User
+ALFRESCO_USER={alfresco_user}
 """
     
     with open(env_file, 'w') as f:
@@ -1185,7 +1216,6 @@ PGDATABASE={pg_database}
     
     # Set ownership if running as root
     if is_running_as_root():
-        real_user, real_uid, real_gid = get_real_user()
         os.chown(env_file, real_uid, real_gid)
     
     os.chmod(env_file, 0o600)  # Secure the file
@@ -1212,8 +1242,8 @@ def setup_restore_only():
     print_info("  1. Check prerequisites (Python 3)")
     print_info("  2. Create a Python virtual environment")
     print_info("  3. Install required dependencies")
-    print_info("  4. Configure PostgreSQL credentials in .env file")
-    print_info("\nThe restore script will prompt for backup location and target when run.\n")
+    print_info("  4. Configure restore settings in .env file (PostgreSQL, paths, user)")
+    print_info("\nThe restore script will use settings from .env file automatically.\n")
     
     if not ask_yes_no("Start restore setup?"):
         print_info("Setup canceled.")
@@ -1237,12 +1267,15 @@ def setup_restore_only():
     print_header("Restore Setup Complete!")
     print_info("\n✓ Virtual environment created and dependencies installed")
     if Path('.env').exists():
-        print_info("✓ PostgreSQL credentials configured in .env file")
+        print_info("✓ Restore configuration saved to .env file:")
+        print_info("  - PostgreSQL credentials")
+        print_info("  - Backup directory path")
+        print_info("  - Alfresco base directory path")
+        print_info("  - Alfresco OS user")
     print_info("\nYou can now run the restore script:")
     print_info("  python restore.py")
-    print_info("\nThe restore script will prompt you for:")
-    print_info("  - Backup directory location")
-    print_info("  - Alfresco installation directory (target)")
+    print_info("\nThe restore script will use configuration from .env file.")
+    print_info("If .env is missing or incomplete, it will prompt for missing values.")
     print_info("\nSee docs/operations/restore-runbook.md for detailed restore procedures.")
 
 def main():
