@@ -173,13 +173,65 @@ def create_env_file():
         print_warning("Skipping .env creation. You must create it manually before running backups.")
         return False
     
-    # Collect configuration
+    # Collect path configuration first (needed for auto-detection)
+    print_info("\n--- Path Configuration ---")
+    while True:
+        backup_dir = input(f"{Colors.OKCYAN}Backup directory path: {Colors.ENDC}").strip()
+        if backup_dir and Path(backup_dir).exists():
+            break
+        print_error(f"Directory does not exist: {backup_dir}")
+        print_info("Please enter a valid backup directory path.")
+    
+    while True:
+        alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory path: {Colors.ENDC}").strip()
+        if alf_base_dir and Path(alf_base_dir).exists():
+            break
+        print_error(f"Directory does not exist: {alf_base_dir}")
+        print_info("Please enter a valid Alfresco base directory path.")
+    
+    # Try to auto-detect database settings from alfresco-global.properties
     print_info("\n--- Database Configuration ---")
-    pg_host = input(f"{Colors.OKCYAN}PostgreSQL host [localhost]: {Colors.ENDC}").strip() or 'localhost'
-    pg_port = input(f"{Colors.OKCYAN}PostgreSQL port [5432]: {Colors.ENDC}").strip() or '5432'
-    pg_user = input(f"{Colors.OKCYAN}PostgreSQL backup user [alfresco]: {Colors.ENDC}").strip() or 'alfresco'
-    pg_password = input(f"{Colors.OKCYAN}PostgreSQL backup user password: {Colors.ENDC}").strip()
-    pg_database = input(f"{Colors.OKCYAN}PostgreSQL database [postgres]: {Colors.ENDC}").strip() or 'postgres'
+    print_info("Attempting to auto-detect database settings from alfresco-global.properties...")
+    db_settings = detect_db_settings_from_alfresco(alf_base_dir)
+    
+    if db_settings:
+        print_success("Auto-detected database settings from alfresco-global.properties")
+        print_info(f"  Host: {db_settings.get('host', 'not found')}")
+        print_info(f"  Port: {db_settings.get('port', 'not found')}")
+        print_info(f"  User: {db_settings.get('user', 'not found')}")
+        print_info(f"  Database: {db_settings.get('database', 'not found')}")
+        
+        use_detected = ask_yes_no("Use these detected settings?", default=True)
+        
+        if use_detected:
+            pg_host = db_settings.get('host', 'localhost')
+            pg_port = db_settings.get('port', '5432')
+            pg_user = db_settings.get('user', 'alfresco')
+            pg_password = db_settings.get('password', '')
+            pg_database = db_settings.get('database', 'postgres')
+            
+            # For backup, we typically use 'postgres' database, but allow override
+            if pg_database != 'postgres':
+                print_info(f"\nNote: Detected database '{pg_database}', but backups typically use 'postgres' database.")
+                override_db = input(f"{Colors.OKCYAN}PostgreSQL database for backup [{pg_database}]: {Colors.ENDC}").strip()
+                if override_db:
+                    pg_database = override_db
+        else:
+            # Manual entry with detected values as defaults
+            pg_host = input(f"{Colors.OKCYAN}PostgreSQL host [{db_settings.get('host', 'localhost')}]: {Colors.ENDC}").strip() or db_settings.get('host', 'localhost')
+            pg_port = input(f"{Colors.OKCYAN}PostgreSQL port [{db_settings.get('port', '5432')}]: {Colors.ENDC}").strip() or db_settings.get('port', '5432')
+            pg_user = input(f"{Colors.OKCYAN}PostgreSQL user [{db_settings.get('user', 'alfresco')}]: {Colors.ENDC}").strip() or db_settings.get('user', 'alfresco')
+            pg_password = input(f"{Colors.OKCYAN}PostgreSQL password: {Colors.ENDC}").strip()
+            if not pg_password:
+                pg_password = db_settings.get('password', '')
+            pg_database = input(f"{Colors.OKCYAN}PostgreSQL database [{db_settings.get('database', 'postgres')}]: {Colors.ENDC}").strip() or db_settings.get('database', 'postgres')
+    else:
+        print_warning("Could not auto-detect database settings. Please enter manually.")
+        pg_host = input(f"{Colors.OKCYAN}PostgreSQL host [localhost]: {Colors.ENDC}").strip() or 'localhost'
+        pg_port = input(f"{Colors.OKCYAN}PostgreSQL port [5432]: {Colors.ENDC}").strip() or '5432'
+        pg_user = input(f"{Colors.OKCYAN}PostgreSQL user [alfresco]: {Colors.ENDC}").strip() or 'alfresco'
+        pg_password = input(f"{Colors.OKCYAN}PostgreSQL password: {Colors.ENDC}").strip()
+        pg_database = input(f"{Colors.OKCYAN}PostgreSQL database [postgres]: {Colors.ENDC}").strip() or 'postgres'
     default_superuser = pg_user if pg_user else 'postgres'
     pg_superuser = input(
         f"{Colors.OKCYAN}PostgreSQL superuser (for granting privileges) [{default_superuser}]: {Colors.ENDC}"
@@ -191,10 +243,6 @@ def create_env_file():
         print_info(f"Auto-detected PostgreSQL system user: {pg_system_user}")
     else:
         pg_system_user = input(f"{Colors.OKCYAN}PostgreSQL system user [postgres]: {Colors.ENDC}").strip() or 'postgres'
-    
-    print_info("\n--- Paths Configuration ---")
-    backup_dir = input(f"{Colors.OKCYAN}Backup directory [/mnt/backups/alfresco]: {Colors.ENDC}").strip() or '/mnt/backups/alfresco'
-    alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory [/opt/alfresco]: {Colors.ENDC}").strip() or '/opt/alfresco'
     
     print_info("\n--- Retention Policy ---")
     retention_days = input(f"{Colors.OKCYAN}Retention period in days [7]: {Colors.ENDC}").strip() or '7'
@@ -350,6 +398,100 @@ def create_directories():
     except Exception as e:
         print_error(f"Error creating directories: {e}")
         return False
+
+def parse_alfresco_global_properties(alf_base_dir: str) -> Optional[dict]:
+    """Parse alfresco-global.properties and extract database connection settings."""
+    alf_base_path = Path(alf_base_dir)
+    
+    # Try common locations for alfresco-global.properties
+    possible_paths = [
+        alf_base_path / 'tomcat' / 'shared' / 'classes' / 'alfresco-global.properties',
+        alf_base_path / 'alf_data' / 'tomcat' / 'shared' / 'classes' / 'alfresco-global.properties',
+    ]
+    
+    props_file = None
+    for path in possible_paths:
+        if path.exists():
+            props_file = path
+            break
+    
+    if not props_file:
+        return None
+    
+    try:
+        properties = {}
+        
+        with open(props_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # Skip comments and empty lines
+                if not line or line.startswith('#'):
+                    continue
+                
+                # Parse key=value pairs
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    
+                    # Remove quotes if present
+                    if value.startswith('"') and value.endswith('"'):
+                        value = value[1:-1]
+                    elif value.startswith("'") and value.endswith("'"):
+                        value = value[1:-1]
+                    
+                    properties[key] = value
+        
+        # Extract database settings
+        db_settings = {}
+        
+        if 'db.username' in properties:
+            db_settings['user'] = properties['db.username']
+        
+        if 'db.password' in properties:
+            db_settings['password'] = properties['db.password']
+        
+        if 'db.name' in properties:
+            db_settings['database'] = properties['db.name']
+        
+        # Parse db.url to extract host and port
+        if 'db.url' in properties:
+            db_url = properties['db.url']
+            # Handle variable substitution (e.g., ${db.name})
+            if '${db.name}' in db_url and 'db.name' in properties:
+                db_url = db_url.replace('${db.name}', properties['db.name'])
+            
+            # Parse jdbc:postgresql://host:port/database
+            import re
+            match = re.search(r'jdbc:postgresql://([^:]+):?(\d+)?/(.+)', db_url)
+            if match:
+                db_settings['host'] = match.group(1)
+                db_settings['port'] = match.group(2) or '5432'
+                # Database name from URL overrides db.name if present
+                if not db_settings.get('database'):
+                    db_settings['database'] = match.group(3)
+        
+        return db_settings if db_settings else None
+        
+    except Exception as e:
+        print_warning(f"Could not parse alfresco-global.properties: {e}")
+        return None
+
+def detect_db_settings_from_alfresco(alf_base_dir: Optional[str] = None) -> Optional[dict]:
+    """Try to detect database settings from alfresco-global.properties."""
+    if not alf_base_dir:
+        # Try to get from existing .env or ask user
+        config = load_env_config()
+        alf_base_dir = config.get('ALF_BASE_DIR')
+        
+        if not alf_base_dir:
+            # Ask for alf_base_dir first
+            alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory: {Colors.ENDC}").strip()
+    
+    if not alf_base_dir or not Path(alf_base_dir).exists():
+        return None
+    
+    return parse_alfresco_global_properties(alf_base_dir)
 
 def get_postgres_user() -> Optional[str]:
     """Detect or ask for the PostgreSQL system user."""
@@ -1161,19 +1303,7 @@ def create_restore_env_file():
         print_warning("Skipping .env creation. Restore will fail without configuration.")
         return False
     
-    # Collect PostgreSQL configuration
-    print_info("\n--- PostgreSQL Configuration ---")
-    pg_host = input(f"{Colors.OKCYAN}PostgreSQL host [localhost]: {Colors.ENDC}").strip() or 'localhost'
-    pg_port = input(f"{Colors.OKCYAN}PostgreSQL port [5432]: {Colors.ENDC}").strip() or '5432'
-    pg_user = input(f"{Colors.OKCYAN}PostgreSQL user [alfresco]: {Colors.ENDC}").strip() or 'alfresco'
-    pg_password = input(f"{Colors.OKCYAN}PostgreSQL password: {Colors.ENDC}").strip()
-    pg_database = input(f"{Colors.OKCYAN}PostgreSQL database [postgres]: {Colors.ENDC}").strip() or 'postgres'
-    
-    if not pg_password:
-        print_error("PostgreSQL password is required for restore operations")
-        return False
-    
-    # Collect path configuration
+    # Collect path configuration first (needed for auto-detection)
     print_info("\n--- Path Configuration ---")
     while True:
         backup_dir = input(f"{Colors.OKCYAN}Backup directory path: {Colors.ENDC}").strip()
@@ -1188,6 +1318,47 @@ def create_restore_env_file():
             break
         print_error(f"Directory does not exist: {alf_base_dir}")
         print_info("Please enter a valid Alfresco base directory path.")
+    
+    # Try to auto-detect database settings from alfresco-global.properties
+    print_info("\n--- PostgreSQL Configuration ---")
+    print_info("Attempting to auto-detect database settings from alfresco-global.properties...")
+    db_settings = detect_db_settings_from_alfresco(alf_base_dir)
+    
+    if db_settings:
+        print_success("Auto-detected database settings from alfresco-global.properties")
+        print_info(f"  Host: {db_settings.get('host', 'not found')}")
+        print_info(f"  Port: {db_settings.get('port', 'not found')}")
+        print_info(f"  User: {db_settings.get('user', 'not found')}")
+        print_info(f"  Database: {db_settings.get('database', 'not found')}")
+        
+        use_detected = ask_yes_no("Use these detected settings?", default=True)
+        
+        if use_detected:
+            pg_host = db_settings.get('host', 'localhost')
+            pg_port = db_settings.get('port', '5432')
+            pg_user = db_settings.get('user', 'alfresco')
+            pg_password = db_settings.get('password', '')
+            pg_database = db_settings.get('database', 'postgres')
+        else:
+            # Manual entry with detected values as defaults
+            pg_host = input(f"{Colors.OKCYAN}PostgreSQL host [{db_settings.get('host', 'localhost')}]: {Colors.ENDC}").strip() or db_settings.get('host', 'localhost')
+            pg_port = input(f"{Colors.OKCYAN}PostgreSQL port [{db_settings.get('port', '5432')}]: {Colors.ENDC}").strip() or db_settings.get('port', '5432')
+            pg_user = input(f"{Colors.OKCYAN}PostgreSQL user [{db_settings.get('user', 'alfresco')}]: {Colors.ENDC}").strip() or db_settings.get('user', 'alfresco')
+            pg_password = input(f"{Colors.OKCYAN}PostgreSQL password: {Colors.ENDC}").strip()
+            if not pg_password:
+                pg_password = db_settings.get('password', '')
+            pg_database = input(f"{Colors.OKCYAN}PostgreSQL database [{db_settings.get('database', 'postgres')}]: {Colors.ENDC}").strip() or db_settings.get('database', 'postgres')
+    else:
+        print_warning("Could not auto-detect database settings. Please enter manually.")
+        pg_host = input(f"{Colors.OKCYAN}PostgreSQL host [localhost]: {Colors.ENDC}").strip() or 'localhost'
+        pg_port = input(f"{Colors.OKCYAN}PostgreSQL port [5432]: {Colors.ENDC}").strip() or '5432'
+        pg_user = input(f"{Colors.OKCYAN}PostgreSQL user [alfresco]: {Colors.ENDC}").strip() or 'alfresco'
+        pg_password = input(f"{Colors.OKCYAN}PostgreSQL password: {Colors.ENDC}").strip()
+        pg_database = input(f"{Colors.OKCYAN}PostgreSQL database [postgres]: {Colors.ENDC}").strip() or 'postgres'
+    
+    if not pg_password:
+        print_error("PostgreSQL password is required for restore operations")
+        return False
     
     # Collect Alfresco user
     real_user, real_uid, real_gid = get_real_user()
