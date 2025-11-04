@@ -358,12 +358,18 @@ class AlfrescoRestore:
                 pbar.update(backup_size)
             
             # Check results
-            if gunzip_process.returncode != 0:
-                error_msg = gunzip_stderr.decode('utf-8', errors='replace') if gunzip_stderr else 'Unknown error'
-                self.logger.error(f"gunzip failed with exit code {gunzip_process.returncode}: {error_msg}")
-                return False
+            # Note: gunzip may exit with -13 (SIGPIPE) when psql finishes early, which is normal
+            # Only check gunzip if psql failed, or if gunzip failed with a non-SIGPIPE error
+            psql_success = psql_process.returncode == 0
             
-            if psql_process.returncode != 0:
+            if not psql_success:
+                # psql failed, check gunzip for additional error info
+                if gunzip_process.returncode != 0 and gunzip_process.returncode != -13:
+                    # gunzip failed with something other than SIGPIPE
+                    error_msg = gunzip_stderr.decode('utf-8', errors='replace') if gunzip_stderr else 'Unknown error'
+                    self.logger.error(f"gunzip failed with exit code {gunzip_process.returncode}: {error_msg}")
+                
+                # Report psql error
                 error_msg = stderr.decode('utf-8', errors='replace') if stderr else 'Unknown error'
                 stdout_msg = stdout.decode('utf-8', errors='replace') if stdout else ''
                 self.logger.error(f"psql failed with exit code {psql_process.returncode}")
@@ -372,6 +378,13 @@ class AlfrescoRestore:
                 if stdout_msg:
                     self.logger.info(f"Output: {stdout_msg}")
                 return False
+            
+            # psql succeeded, check gunzip only if it's a real error (not SIGPIPE)
+            if gunzip_process.returncode != 0 and gunzip_process.returncode != -13:
+                # gunzip failed with something other than expected SIGPIPE
+                error_msg = gunzip_stderr.decode('utf-8', errors='replace') if gunzip_stderr else 'Unknown error'
+                self.logger.warning(f"gunzip exited with code {gunzip_process.returncode}: {error_msg}")
+                # Don't fail the restore if psql succeeded, but log the warning
             
             self.logger.info("PostgreSQL restore completed successfully")
             return True
