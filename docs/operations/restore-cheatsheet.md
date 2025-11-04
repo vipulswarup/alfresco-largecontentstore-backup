@@ -16,14 +16,15 @@ RESTORE_DATE=2025-10-21_14-31-23  # Replace with desired backup timestamp
 ```bash
 cd $ALF_BASE_DIR && ./alfresco.sh stop
 
-sudo mv $ALF_BASE_DIR/alf_data/postgresql/data{,.backup.$(date +%Y%m%d-%H%M%S)}
-sudo mv $ALF_BASE_DIR/alf_data/contentstore{,.backup.$(date +%Y%m%d-%H%M%S)}
+# Use automated restore script (recommended)
+cd /path/to/alfresco-largecontentstore-backup
+source venv/bin/activate
+python restore.py
+# Select option 1 (Full system restore)
 
-sudo mkdir -p $ALF_BASE_DIR/alf_data/postgresql/data
-sudo tar -xzf $BACKUP_DIR/postgres/base-$RESTORE_DATE/base.tar.gz \
-    -C $ALF_BASE_DIR/alf_data/postgresql/data
-sudo chown -R $ALFRESCO_USER:$ALFRESCO_USER $ALF_BASE_DIR/alf_data/postgresql/data
-sudo chmod 700 $ALF_BASE_DIR/alf_data/postgresql/data
+# Or restore manually:
+gunzip -c $BACKUP_DIR/postgres/postgres-$RESTORE_DATE.sql.gz | \
+  psql -h localhost -U alfresco -d postgres
 
 sudo mkdir -p $ALF_BASE_DIR/alf_data/contentstore
 sudo rsync -av --delete \
@@ -38,13 +39,16 @@ cd $ALF_BASE_DIR && ./alfresco.sh start
 
 ```bash
 cd $ALF_BASE_DIR && ./alfresco.sh stop
-sudo mv $ALF_BASE_DIR/alf_data/postgresql/data{,.backup.$(date +%Y%m%d-%H%M%S)}
 
-sudo mkdir -p $ALF_BASE_DIR/alf_data/postgresql/data
-sudo tar -xzf $BACKUP_DIR/postgres/base-$RESTORE_DATE/base.tar.gz \
-    -C $ALF_BASE_DIR/alf_data/postgresql/data
-sudo chown -R $ALFRESCO_USER:$ALFRESCO_USER $ALF_BASE_DIR/alf_data/postgresql/data
-sudo chmod 700 $ALF_BASE_DIR/alf_data/postgresql/data
+# Use automated restore script (recommended)
+cd /path/to/alfresco-largecontentstore-backup
+source venv/bin/activate
+python restore.py
+# Select option 3 (PostgreSQL only)
+
+# Or restore manually:
+gunzip -c $BACKUP_DIR/postgres/postgres-$RESTORE_DATE.sql.gz | \
+  psql -h localhost -U alfresco -d postgres
 
 cd $ALF_BASE_DIR && ./alfresco.sh start
 ```
@@ -66,31 +70,7 @@ cd $ALF_BASE_DIR && ./alfresco.sh start
 
 ## Point-in-Time Recovery (PITR)
 
-```bash
-RECOVERY_TIME="2025-10-21 14:30:00"
-cd $ALF_BASE_DIR && ./alfresco.sh stop
-
-sudo mv $ALF_BASE_DIR/alf_data/postgresql/data{,.backup.$(date +%Y%m%d-%H%M%S)}
-
-sudo mkdir -p $ALF_BASE_DIR/alf_data/postgresql/data
-sudo tar -xzf $BACKUP_DIR/postgres/base-$RESTORE_DATE/base.tar.gz \
-    -C $ALF_BASE_DIR/alf_data/postgresql/data
-
-cat > /tmp/recovery.conf <<EOF
-restore_command = 'cp $BACKUP_DIR/pg_wal/%f %p'
-recovery_target_time = '$RECOVERY_TIME'
-recovery_target_action = 'promote'
-recovery_target_timeline = 'latest'
-EOF
-
-sudo mv /tmp/recovery.conf $ALF_BASE_DIR/alf_data/postgresql/data/recovery.conf
-sudo chown $ALFRESCO_USER:$ALFRESCO_USER $ALF_BASE_DIR/alf_data/postgresql/data/recovery.conf
-sudo chmod 600 $ALF_BASE_DIR/alf_data/postgresql/data/recovery.conf
-
-cd $ALF_BASE_DIR && ./alfresco.sh start postgres
-```
-
-After PostgreSQL reaches the target state, restore the matching contentstore snapshot and start Alfresco (`./alfresco.sh start`).
+**Not supported.** SQL dump backups provide snapshot recovery only. To restore to a specific time, select the backup closest to your desired recovery point and restore normally. See `restore-runbook.md` for details.
 
 ## Verification Snippets
 

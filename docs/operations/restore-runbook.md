@@ -38,63 +38,57 @@ This runbook provides detailed instructions for restoring Alfresco from backups 
 BACKUP_DIR=/mnt/backups/alfresco
 RESTORE_DATE=2025-10-21_14-31-23  # replace with desired timestamp
 
-ls -lh $BACKUP_DIR/postgres/base-$RESTORE_DATE/
+ls -lh $BACKUP_DIR/postgres/postgres-$RESTORE_DATE.sql.gz
 ls -lh $BACKUP_DIR/contentstore/contentstore-$RESTORE_DATE/
-ls -lh $BACKUP_DIR/pg_wal/
 ```
 
-Confirm that `base.tar.gz` exists and the contentstore directory contains data before proceeding.
+Confirm that the SQL dump file exists and the contentstore directory contains data before proceeding.
 
 ---
 
 ## PostgreSQL Restore
 
-### Method 1: Base Backup Restore (Most Common)
+### SQL Dump Restore
 
-1. **Stop Alfresco and PostgreSQL**
+1. **Stop Alfresco**
 
    ```bash
    cd /opt/eisenvault_installations/alfresco-home
    ./alfresco.sh stop
-   ./alfresco.sh stop postgres
    pgrep -f "java.*alfresco" || echo "Alfresco stopped"
-   pgrep -f "postgres" || echo "PostgreSQL stopped"
    ```
 
-2. **Backup Current Database**
+2. **Load Database Configuration**
 
+   The restore process reads connection details from `.env` file. Ensure the file exists and contains:
+   
    ```bash
-   ALF_BASE_DIR=/opt/eisenvault_installations/alfresco-home
-   sudo mv $ALF_BASE_DIR/alf_data/postgresql/data \
-        $ALF_BASE_DIR/alf_data/postgresql/data.backup.$(date +%Y%m%d-%H%M%S)
+   PGHOST=localhost
+   PGPORT=5432
+   PGUSER=alfresco
+   PGPASSWORD=your_password
+   PGDATABASE=postgres
    ```
 
-3. **Extract Backup**
+3. **Restore SQL Dump**
 
    ```bash
    BACKUP_DIR=/mnt/backups/alfresco
    RESTORE_DATE=2025-10-21_14-31-23
    ALF_BASE_DIR=/opt/eisenvault_installations/alfresco-home
-   DATA_DIR=$ALF_BASE_DIR/alf_data/postgresql/data
-
-   sudo mkdir -p $DATA_DIR
-   cd $BACKUP_DIR/postgres/base-$RESTORE_DATE/
-   sudo tar -xzf base.tar.gz -C $DATA_DIR
-   sudo chown -R evadm:evadm $DATA_DIR
-   sudo chmod 700 $DATA_DIR
+   
+   # Use the automated restore script (recommended)
+   cd /path/to/alfresco-largecontentstore-backup
+   source venv/bin/activate
+   python restore.py
+   # Select option 3 (PostgreSQL only) and follow prompts
+   
+   # Or restore manually:
+   gunzip -c $BACKUP_DIR/postgres/postgres-$RESTORE_DATE.sql.gz | \
+     psql -h localhost -U alfresco -d postgres
    ```
 
-4. **Optional: Configure PITR** (see [Point-in-Time Recovery](#point-in-time-recovery-pitr)).
-
-5. **Start PostgreSQL**
-
-   ```bash
-   cd $ALF_BASE_DIR
-   ./alfresco.sh start postgres
-   tail -f $ALF_BASE_DIR/alf_data/postgresql/postgresql.log
-   ```
-
-6. **Verify Connectivity**
+4. **Verify Connectivity**
 
    ```bash
    psql -h localhost -U alfresco -d alfresco -c "SELECT COUNT(*) FROM alf_node;"
@@ -154,55 +148,25 @@ ls -1 $BACKUP_DIR/contentstore/
 ```
 
 1. Stop Alfresco.
-2. Backup existing `alf_data/postgresql/data` and `alf_data/contentstore` directories.
-3. Restore PostgreSQL (Base Backup Restore steps 3–5).
-4. Restore contentstore (steps above).
+2. Backup existing `alf_data/postgresql/data` and `alf_data/contentstore` directories (automatically done by restore script).
+3. Restore PostgreSQL from SQL dump (see PostgreSQL Restore section).
+4. Restore contentstore (see Contentstore Restore section).
 5. Start Alfresco and monitor `tomcat/logs/catalina.out`.
 
-A sample automation script is included in the original documentation (`restore_full.sh`); adapt it for your environment if desired.
+The automated restore script (`restore.py`) handles all these steps interactively. Select option 1 (Full system restore) when prompted.
 
 ---
 
 ## Point-in-Time Recovery (PITR)
 
-PITR lets you recover to any moment between a base backup and the current time using WAL archives.
+**Note:** Point-in-time recovery is not supported with SQL dump backups. SQL dumps provide snapshot recovery only, meaning you can restore to the exact state captured at backup time, but not to an arbitrary point between backups.
 
-1. **Select Target Time**
+To restore to a specific time:
+1. Identify the backup closest to your desired recovery point.
+2. Use that backup for restoration (see Full System Restore above).
+3. If more recent data is needed, consider implementing transaction log backups or switching to a WAL-based backup strategy.
 
-   ```bash
-   RECOVERY_TIME="2025-10-21 14:30:00"
-   ls -lht /mnt/backups/alfresco/pg_wal/
-   ```
-
-2. **Restore Base Backup** (steps 1–3 from PostgreSQL Restore).
-
-3. **Create `recovery.conf`** inside the new data directory:
-
-   ```bash
-   cat > /tmp/recovery.conf <<EOF
-   restore_command = 'cp /mnt/backups/alfresco/pg_wal/%f %p'
-   recovery_target_time = '$RECOVERY_TIME'
-   recovery_target_action = 'promote'
-   recovery_target_timeline = 'latest'
-   EOF
-
-   sudo mv /tmp/recovery.conf $DATA_DIR/recovery.conf
-   sudo chown evadm:evadm $DATA_DIR/recovery.conf
-   sudo chmod 600 $DATA_DIR/recovery.conf
-   ```
-
-4. **Start PostgreSQL in Recovery Mode**
-
-   ```bash
-   ./alfresco.sh start postgres
-   tail -f $ALF_BASE_DIR/alf_data/postgresql/postgresql.log
-   ```
-
-5. **Restore Contentstore Snapshot** from the same or earlier timestamp.
-
-6. **Start Alfresco** and validate the application state.
-
-Alternative targets (`recovery_target_xid`, `recovery_target_name`, `recovery_target='immediate'`) can be used when time-based recovery is not suitable.
+For snapshot recovery, select the backup timestamp that best matches your recovery point objective.
 
 ---
 
@@ -252,13 +216,14 @@ sudo rm -f $ALF_BASE_DIR/alf_data/postgresql/data/postmaster.pid
 tail -100 $ALF_BASE_DIR/alf_data/postgresql/postgresql.log
 ```
 
-### WAL Files Missing During PITR
+### SQL Dump File Corrupted
 
 ```bash
-ls -lh /mnt/backups/alfresco/pg_wal/
-cat $DATA_DIR/recovery.conf
-cp /mnt/backups/alfresco/pg_wal/000000010000000000000001 /tmp/test.wal
-sudo chmod 755 /mnt/backups/alfresco/pg_wal
+# Verify file integrity
+gunzip -t $BACKUP_DIR/postgres/postgres-$RESTORE_DATE.sql.gz
+
+# If corrupted, try a different backup
+ls -lh $BACKUP_DIR/postgres/
 ```
 
 ### Contentstore Looks Empty
@@ -288,12 +253,17 @@ sudo chown -R evadm:evadm $ALF_BASE_DIR/alf_data/contentstore
 
 ### Database Version Mismatch
 
+SQL dumps are generally portable across PostgreSQL versions, but some features may differ. If you encounter version-specific errors:
+
 ```bash
-sudo tar -xzf base.tar.gz PG_VERSION -O
+# Check PostgreSQL version
 psql -h localhost -U alfresco -c "SELECT version();"
+
+# Review dump file for version-specific syntax
+gunzip -c $BACKUP_DIR/postgres/postgres-$RESTORE_DATE.sql.gz | head -20
 ```
 
-If versions differ, consider `pg_upgrade`, `pg_dump/pg_restore`, or installing a matching server version.
+If versions differ significantly, consider using `pg_dump` with version-specific options or restoring to a matching PostgreSQL version.
 
 ---
 

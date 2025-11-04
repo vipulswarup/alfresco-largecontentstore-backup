@@ -1,13 +1,13 @@
 # Alfresco Backup System
 
-Python-based backup and restore tooling for Alfresco deployments, including PostgreSQL base backups, contentstore snapshots, retention, and PITR readiness.
+Python-based backup and restore tooling for Alfresco deployments, including PostgreSQL SQL dumps, contentstore snapshots, and automated retention.
 
 ## Feature Highlights
 
-- PostgreSQL base backups via `pg_basebackup` with WAL validation for PITR
+- PostgreSQL backups via `pg_dump` creating compressed SQL dump files
 - Contentstore snapshots using `rsync` and hardlinks for space efficiency
-- Automated retention, logging, locking, and failure email alerts
-- Interactive restore workflow covering full, partial, and point-in-time recovery
+- Automated retention policy (default 7 days), logging, locking, and failure email alerts
+- Interactive restore workflow covering full system and component-level recovery
 - Backward-compatible wrapper scripts for existing cron jobs and tooling
 
 ## Quick Start

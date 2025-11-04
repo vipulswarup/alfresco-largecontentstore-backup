@@ -202,8 +202,8 @@ class AlfrescoRestore:
         
         backups = []
         for item in backup_dir.iterdir():
-            if item.is_dir() and item.name.startswith('base-'):
-                timestamp = item.name.replace('base-', '')
+            if item.is_file() and item.name.startswith('postgres-') and item.name.endswith('.sql.gz'):
+                timestamp = item.name.replace('postgres-', '').replace('.sql.gz', '')
                 backups.append(timestamp)
         
         return sorted(backups, reverse=True)
@@ -224,21 +224,16 @@ class AlfrescoRestore:
     
     def validate_postgres_backup(self, timestamp: str) -> bool:
         """Validate PostgreSQL backup exists and has content."""
-        backup_dir = Path(self.config.backup_dir) / 'postgres' / f'base-{timestamp}'
+        backup_file = Path(self.config.backup_dir) / 'postgres' / f'postgres-{timestamp}.sql.gz'
         
-        if not backup_dir.exists():
-            self.logger.error(f"PostgreSQL backup directory not found: {backup_dir}")
+        if not backup_file.exists():
+            self.logger.error(f"PostgreSQL backup file not found: {backup_file}")
             return False
         
-        base_tar = backup_dir / 'base.tar.gz'
-        if not base_tar.exists():
-            self.logger.error(f"PostgreSQL backup file not found: {base_tar}")
-            return False
-        
-        size_mb = base_tar.stat().st_size / (1024 * 1024)
+        size_mb = backup_file.stat().st_size / (1024 * 1024)
         self.logger.info(f"PostgreSQL backup size: {size_mb:.2f} MB")
         
-        if size_mb < 1:
+        if size_mb < 0.1:
             self.logger.warning("PostgreSQL backup file is suspiciously small")
             return False
         
@@ -277,47 +272,100 @@ class AlfrescoRestore:
         """Restore PostgreSQL from backup."""
         self.logger.info(f"Restoring PostgreSQL from backup: {timestamp}")
         
-        backup_dir = Path(self.config.backup_dir) / 'postgres' / f'base-{timestamp}'
-        base_tar = backup_dir / 'base.tar.gz'
+        backup_file = Path(self.config.backup_dir) / 'postgres' / f'postgres-{timestamp}.sql.gz'
         
-        if not self.config.postgres_data_dir:
-            self.logger.error("PostgreSQL data directory not configured")
+        if not backup_file.exists():
+            self.logger.error(f"PostgreSQL backup file not found: {backup_file}")
             return False
         
+        # Load database connection details from .env file
         try:
-            if self.config.postgres_data_dir.exists():
-                subprocess.run(['sudo', 'rm', '-rf', str(self.config.postgres_data_dir)], check=True)
-            self.config.postgres_data_dir.mkdir(parents=True, exist_ok=True)
+            from dotenv import load_dotenv
+            load_dotenv()
+            pg_host = os.getenv('PGHOST', 'localhost')
+            pg_port = os.getenv('PGPORT', '5432')
+            pg_user = os.getenv('PGUSER', 'alfresco')
+            pg_password = os.getenv('PGPASSWORD')
+            pg_database = os.getenv('PGDATABASE', 'postgres')
             
-            self.logger.info("Extracting PostgreSQL backup...")
+            if not pg_password:
+                self.logger.error("PGPASSWORD not found in .env file")
+                return False
+        except Exception as e:
+            self.logger.error(f"Failed to load database configuration: {e}")
+            return False
+        
+        # Use embedded PostgreSQL tools if available
+        embedded_psql = self.config.alf_base_dir / 'postgresql' / 'bin' / 'psql'
+        if embedded_psql.exists():
+            psql_cmd = str(embedded_psql)
+            self.logger.info(f"Using embedded psql: {psql_cmd}")
+        else:
+            psql_cmd = 'psql'
+            self.logger.info(f"Using system psql: {psql_cmd}")
+        
+        try:
+            self.logger.info("Restoring PostgreSQL database from SQL dump...")
             
-            tar_size = base_tar.stat().st_size
-            with tqdm(total=tar_size, unit='B', unit_scale=True, desc="Extracting PostgreSQL") as pbar:
-                process = subprocess.Popen(
-                    ['sudo', 'tar', '-xzf', str(base_tar), '-C', str(self.config.postgres_data_dir)],
+            # Set PGPASSWORD environment variable
+            env = os.environ.copy()
+            env['PGPASSWORD'] = pg_password
+            
+            # Decompress and restore using gunzip piped to psql
+            backup_size = backup_file.stat().st_size
+            
+            with tqdm(total=backup_size, unit='B', unit_scale=True, desc="Restoring PostgreSQL") as pbar:
+                # Start gunzip process
+                gunzip_process = subprocess.Popen(
+                    ['gunzip', '-c', str(backup_file)],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
                 )
                 
-                while True:
-                    chunk = process.stdout.read(1024)
-                    if not chunk:
-                        break
-                    pbar.update(len(chunk))
+                # Start psql process
+                psql_process = subprocess.Popen(
+                    [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database],
+                    stdin=gunzip_process.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env
+                )
                 
-                process.wait()
-                if process.returncode != 0:
-                    raise subprocess.CalledProcessError(process.returncode, 'tar')
+                # Close gunzip's stdout to allow it to receive SIGPIPE if psql fails
+                gunzip_process.stdout.close()
+                
+                # Read output from psql (this will block until complete)
+                stdout, stderr = psql_process.communicate()
+                
+                # Wait for gunzip to finish
+                gunzip_process.wait()
+                
+                # Update progress bar
+                pbar.update(backup_size)
             
-            self.logger.info(f"Setting ownership to {self.config.alfresco_user}...")
-            subprocess.run(['sudo', 'chown', '-R', f'{self.config.alfresco_user}:{self.config.alfresco_user}', str(self.config.postgres_data_dir)], check=True)
-            subprocess.run(['sudo', 'chmod', '700', str(self.config.postgres_data_dir)], check=True)
+            # Check results
+            if gunzip_process.returncode != 0:
+                error_msg = gunzip_process.stderr.decode('utf-8', errors='replace') if gunzip_process.stderr else 'Unknown error'
+                self.logger.error(f"gunzip failed with exit code {gunzip_process.returncode}: {error_msg}")
+                return False
+            
+            if psql_process.returncode != 0:
+                error_msg = stderr.decode('utf-8', errors='replace') if stderr else 'Unknown error'
+                stdout_msg = stdout.decode('utf-8', errors='replace') if stdout else ''
+                self.logger.error(f"psql failed with exit code {psql_process.returncode}")
+                if error_msg:
+                    self.logger.error(f"Error: {error_msg}")
+                if stdout_msg:
+                    self.logger.info(f"Output: {stdout_msg}")
+                return False
             
             self.logger.info("PostgreSQL restore completed successfully")
             return True
             
         except Exception as e:
             self.logger.error(f"PostgreSQL restore failed: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return False
     
     def restore_contentstore(self, timestamp: str) -> bool:
@@ -651,93 +699,14 @@ def main():
         
         elif restore_mode == 2:
             logger.section("Point-in-Time Recovery")
-            
-            pg_backups = restore.list_postgres_backups()
-            cs_backups = restore.list_contentstore_backups()
-            
-            if not pg_backups:
-                logger.error("No PostgreSQL backups found")
-                sys.exit(1)
-            
-            wal_files = restore.list_wal_files()
-            logger.info(f"Found {len(wal_files)} WAL files for recovery")
-            
-            pg_timestamp = select_backup(pg_backups, "PostgreSQL base backup")
-            if not pg_timestamp:
-                logger.error("No PostgreSQL backup selected")
-                sys.exit(1)
-            
-            logger.info(f"Selected PostgreSQL backup: {pg_timestamp}")
-            
-            while True:
-                target_time = input("\nEnter target recovery time (YYYY-MM-DD HH:MM:SS) or press Enter for latest: ").strip()
-                if not target_time:
-                    target_time = None
-                    logger.info("Recovering to latest available time")
-                    break
-                try:
-                    datetime.strptime(target_time, '%Y-%m-%d %H:%M:%S')
-                    break
-                except ValueError:
-                    print("Invalid format. Please use YYYY-MM-DD HH:MM:SS")
-            
-            logger.section("Validating Backup")
-            if not restore.validate_postgres_backup(pg_timestamp):
-                logger.error("PostgreSQL backup validation failed")
-                sys.exit(1)
-            
-            logger.section("Restore Confirmation")
-            logger.info("About to perform PITR:")
-            logger.info(f"  Base backup: {pg_timestamp}")
-            if target_time:
-                logger.info(f"  Recovery target: {target_time}")
-            else:
-                logger.info(f"  Recovery target: Latest available")
+            logger.error("Point-in-Time Recovery (PITR) is not supported with SQL dump backups.")
+            logger.error("PITR requires WAL (Write-Ahead Log) archiving, which is not enabled.")
             logger.info("")
-            logger.warning("WARNING: This will stop Alfresco and replace current data!")
-            logger.warning("Current data will be backed up automatically.")
+            logger.info("To restore from a specific backup, use option 1 (Full system restore)")
+            logger.info("and select the backup closest to your desired recovery point.")
             logger.info("")
-            
-            confirm = input("Type 'RESTORE' to confirm: ").strip()
-            if confirm != 'RESTORE':
-                logger.info("Restore cancelled by user")
-                sys.exit(0)
-            
-            logger.section("Stopping Alfresco")
-            if not restore.stop_alfresco():
-                logger.error("Failed to stop Alfresco")
-                sys.exit(1)
-            
-            restore.verify_stopped()
-            
-            logger.section("Backing Up Current Data")
-            success, backup_timestamp = restore.backup_current_data()
-            if not success:
-                logger.error("Failed to backup current data")
-                sys.exit(1)
-            logger.info(f"Current data backed up with timestamp: {backup_timestamp}")
-            
-            logger.section("Restoring PostgreSQL Base Backup")
-            if not restore.restore_postgres(pg_timestamp):
-                logger.error("PostgreSQL restore failed")
-                sys.exit(1)
-            
-            logger.section("Configuring PITR")
-            if not restore.configure_pitr(target_time):
-                logger.error("Failed to configure PITR")
-                sys.exit(1)
-            
-            logger.section("Starting Alfresco (Recovery)")
-            logger.info("PostgreSQL will start in recovery mode")
-            logger.info("Monitor recovery progress with: tail -f {}/alf_data/postgresql/postgresql.log".format(config.alf_base_dir))
-            
-            if not restore.start_alfresco():
-                logger.error("Failed to start Alfresco")
-                logger.info("Recovery may still be in progress. Check PostgreSQL logs.")
-            
-            logger.section("PITR Restore Complete")
-            logger.info("Point-in-time recovery initiated successfully!")
-            logger.info(f"Backup log: {log_file}")
+            logger.info("Note: SQL dump backups provide snapshot recovery only, not point-in-time recovery.")
+            sys.exit(1)
         
         elif restore_mode == 3:
             logger.section("PostgreSQL Only Restore")

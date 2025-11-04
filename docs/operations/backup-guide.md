@@ -16,8 +16,8 @@ python backup.py /path/to/custom.env  # Optional override
 During execution the orchestrator:
 
 1. Loads configuration and creates the daily log file in `BACKUP_DIR`.
-2. Validates PostgreSQL WAL settings and acquires the process lock.
-3. Runs PostgreSQL base backup, contentstore snapshot, WAL archive inspection, and retention policy in sequence.
+2. Acquires the process lock to prevent concurrent executions.
+3. Runs PostgreSQL SQL dump, contentstore snapshot, and retention policy in sequence.
 4. Sends an email alert if any step fails.
 
 ## Scheduling with Cron
@@ -59,28 +59,25 @@ Check both logs after initial deployment and periodically review them to confirm
 
 ## Retention Policy
 
-Retention is applied automatically by `retention.py` at the end of each run. Items older than `RETENTION_DAYS` are deleted from:
+Retention is applied automatically by `retention.py` at the end of each run. Items older than `RETENTION_DAYS` (default 7 days) are deleted from:
 
-- `BACKUP_DIR/postgres/base-*`
+- `BACKUP_DIR/postgres/postgres-*.sql.gz`
 - `BACKUP_DIR/contentstore/contentstore-*`
-- `BACKUP_DIR/pg_wal/`
 
-Timestamps embedded in directory names are used when available; otherwise the filesystem modification time is used as a fallback.
+Timestamps embedded in filenames are used when available; otherwise the filesystem modification time is used as a fallback.
 
 ## What Gets Backed Up
 
 ```
 BACKUP_DIR/
-├── postgres/        # Timestamped base backups produced by pg_basebackup
-├── contentstore/    # rsync snapshots with hardlink optimisation
-└── pg_wal/          # WAL archive for PITR
+├── postgres/        # Compressed SQL dump files created by pg_dump
+└── contentstore/    # rsync snapshots with hardlink optimisation
 ```
 
 Each run creates:
 
-- `postgres/base-YYYY-MM-DD_HH-MM-SS/base.tar.gz`
-- `contentstore/contentstore-YYYY-MM-DD_HH-MM-SS` with optional `last` symlink
-- Updated WAL archive files in `pg_wal`
+- `postgres/postgres-YYYY-MM-DD_HH-MM-SS.sql.gz` (compressed SQL dump)
+- `contentstore/contentstore-YYYY-MM-DD_HH-MM-SS/` with optional `last` symlink
 
 ## Email Alerts
 
@@ -88,7 +85,7 @@ When any backup step fails the system sends a detailed email that summarises eac
 
 ## Performance Notes
 
-The Python implementation delegates heavy lifting to `pg_basebackup` and `rsync`; Python overhead is negligible compared to transfer time. Hardlink-based contentstore snapshots significantly reduce disk utilisation for daily jobs.
+The Python implementation delegates heavy lifting to `pg_dump` and `rsync`; Python overhead is negligible compared to transfer time. Hardlink-based contentstore snapshots significantly reduce disk utilisation for daily jobs. SQL dumps are compressed with gzip to minimise storage requirements.
 
 ## Operational Checklist
 

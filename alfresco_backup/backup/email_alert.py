@@ -37,8 +37,6 @@ def send_failure_alert(backup_results, config):
         failed_operations.append('PostgreSQL Backup')
     if not backup_results.get('contentstore', {}).get('success'):
         failed_operations.append('Contentstore Backup')
-    if not backup_results.get('wal', {}).get('success'):
-        failed_operations.append('WAL Archive Check')
     if not backup_results.get('retention', {}).get('success'):
         failed_operations.append('Retention Policy')
     
@@ -75,19 +73,6 @@ def send_failure_alert(backup_results, config):
         body_parts.append(f"Start time: {cs_result.get('start_time', 'unknown')}")
         if cs_result.get('error'):
             body_parts.append(f"\nError details:\n{cs_result.get('error')}")
-    
-    # WAL archive details
-    body_parts.append("\n" + "=" * 70)
-    body_parts.append("\nWAL ARCHIVE CHECK")
-    body_parts.append("\n" + "=" * 70)
-    wal_result = backup_results.get('wal', {})
-    if wal_result.get('success'):
-        body_parts.append(f"\nStatus: SUCCESS")
-        body_parts.append(f"WAL file count: {wal_result.get('wal_count', 0)}")
-    else:
-        body_parts.append(f"\nStatus: FAILED")
-        if wal_result.get('error'):
-            body_parts.append(f"\nError details:\n{wal_result.get('error')}")
     
     # Retention policy details
     body_parts.append("\n" + "=" * 70)

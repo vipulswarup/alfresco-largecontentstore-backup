@@ -14,19 +14,15 @@ from argparse import ArgumentParser
 try:
     from alfresco_backup.utils.config import BackupConfig
     from alfresco_backup.utils.lock import FileLock
-    from alfresco_backup.utils.wal_config_check import check_wal_configuration
     from alfresco_backup.backup.postgres import backup_postgres
     from alfresco_backup.backup.contentstore import backup_contentstore
-    from alfresco_backup.backup.wal import check_wal_archive
     from alfresco_backup.backup.retention import apply_retention
     from alfresco_backup.backup.email_alert import send_failure_alert
 except ImportError:  # pragma: no cover
     from ..utils.config import BackupConfig
     from ..utils.lock import FileLock
-    from ..utils.wal_config_check import check_wal_configuration
     from .postgres import backup_postgres
     from .contentstore import backup_contentstore
-    from .wal import check_wal_archive
     from .retention import apply_retention
     from .email_alert import send_failure_alert
 
@@ -71,30 +67,6 @@ def main():
         # Create backup subdirectories
         (config.backup_dir / 'contentstore').mkdir(parents=True, exist_ok=True)
         (config.backup_dir / 'postgres').mkdir(parents=True, exist_ok=True)
-        (config.backup_dir / 'pg_wal').mkdir(parents=True, exist_ok=True)
-        
-        # Validate PostgreSQL WAL configuration before proceeding
-        logging.info("-" * 70)
-        logging.info("STEP 0: Validating PostgreSQL WAL configuration")
-        logging.info("-" * 70)
-        wal_config_result = check_wal_configuration(config)
-        
-        if not wal_config_result['success']:
-            logging.error("WAL configuration validation FAILED")
-            logging.error(f"  Config file: {wal_config_result.get('config_file', 'not found')}")
-            logging.error(f"  Error: {wal_config_result['error']}")
-            logging.error("\nBackup cannot proceed without proper WAL archiving configuration.")
-            sys.exit(1)
-        
-        logging.info("WAL configuration validated successfully")
-        logging.info(f"  Config file: {wal_config_result['config_file']}")
-        logging.info(f"  Settings:")
-        for key, value in wal_config_result['settings'].items():
-            logging.info(f"    {key} = {value}")
-        
-        if wal_config_result['warnings']:
-            for warning in wal_config_result['warnings']:
-                logging.warning(f"  {warning}")
         
         # Acquire lock to prevent concurrent runs
         lockfile = config.backup_dir / 'backup.lock'
@@ -110,7 +82,7 @@ def main():
                 
                 # Step 1: PostgreSQL backup
                 logging.info("-" * 70)
-                logging.info("STEP 1: PostgreSQL base backup")
+                logging.info("STEP 1: PostgreSQL backup")
                 logging.info("-" * 70)
                 pg_result = backup_postgres(config)
                 backup_results['postgres'] = pg_result
@@ -140,27 +112,9 @@ def main():
                     logging.error(f"Contentstore backup FAILED")
                     logging.error(f"  Error: {cs_result['error']}")
                 
-                # Step 3: WAL archive check
+                # Step 3: Apply retention policy
                 logging.info("-" * 70)
-                logging.info("STEP 3: WAL archive check")
-                logging.info("-" * 70)
-                wal_result = check_wal_archive(config)
-                backup_results['wal'] = wal_result
-                
-                if wal_result['success']:
-                    logging.info(f"WAL archive check completed")
-                    logging.info(f"  Total WAL files: {wal_result['wal_count']}")
-                    if wal_result.get('latest_files'):
-                        logging.info(f"  Latest 20 files:")
-                        for line in wal_result['latest_files'][:20]:
-                            logging.info(f"    {line}")
-                else:
-                    logging.error(f"WAL archive check FAILED")
-                    logging.error(f"  Error: {wal_result['error']}")
-                
-                # Step 4: Apply retention policy
-                logging.info("-" * 70)
-                logging.info(f"STEP 4: Retention policy ({config.retention_days} days)")
+                logging.info(f"STEP 3: Retention policy ({config.retention_days} days)")
                 logging.info("-" * 70)
                 ret_result = apply_retention(config)
                 backup_results['retention'] = ret_result
@@ -181,7 +135,6 @@ def main():
                 any_failure = (
                     not pg_result['success'] or
                     not cs_result['success'] or
-                    not wal_result['success'] or
                     not ret_result['success']
                 )
                 

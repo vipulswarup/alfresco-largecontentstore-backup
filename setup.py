@@ -182,7 +182,7 @@ def create_env_file():
     alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory [/opt/alfresco]: {Colors.ENDC}").strip() or '/opt/alfresco'
     
     print_info("\n--- Retention Policy ---")
-    retention_days = input(f"{Colors.OKCYAN}Retention period in days [30]: {Colors.ENDC}").strip() or '30'
+    retention_days = input(f"{Colors.OKCYAN}Retention period in days [7]: {Colors.ENDC}").strip() or '7'
     
     print_info("\n--- Email Alerts (optional - only sent on failures) ---")
     configure_email = ask_yes_no("Configure email alerts?", default=False)
@@ -274,8 +274,7 @@ def create_directories():
     print_info(f"This will create the following directory structure:")
     print_info(f"  {backup_dir}/")
     print_info(f"  ├── postgres/")
-    print_info(f"  ├── contentstore/")
-    print_info(f"  └── pg_wal/")
+    print_info(f"  └── contentstore/")
     print_info(f"\nAll directories will be owned by: {real_user}")
     
     if running_as_root:
@@ -309,7 +308,7 @@ def create_directories():
                 return False
         
         # Create subdirectories
-        for subdir in ['postgres', 'contentstore', 'pg_wal']:
+        for subdir in ['postgres', 'contentstore']:
             path = Path(backup_dir) / subdir
             path.mkdir(exist_ok=True)
             if running_as_root:
@@ -970,7 +969,7 @@ def configure_cron_job():
 
 def verify_installation():
     """Verify the installation."""
-    print_header("Step 8: Verify Installation")
+    print_header("Step 6: Verify Installation")
     
     print_info("Performing comprehensive verification of all components...")
     
@@ -978,7 +977,7 @@ def verify_installation():
     warnings = []
     
     # Check .env
-    print_info("\n[1/8] Checking .env configuration file...")
+    print_info("\n[1/6] Checking .env configuration file...")
     env_file = Path('.env')
     if env_file.exists():
         print_success(".env file exists")
@@ -999,13 +998,13 @@ def verify_installation():
         config = {}
     
     # Check backup directories
-    print_info("\n[2/8] Checking backup directories...")
+    print_info("\n[2/6] Checking backup directories...")
     backup_dir = config.get('BACKUP_DIR')
     if backup_dir and Path(backup_dir).exists():
         print_success(f"Backup directory exists: {backup_dir}")
         
         # Check subdirectories
-        for subdir in ['postgres', 'contentstore', 'pg_wal']:
+        for subdir in ['postgres', 'contentstore']:
             path = Path(backup_dir) / subdir
             if path.exists():
                 print_success(f"  {subdir}/ exists")
@@ -1017,64 +1016,8 @@ def verify_installation():
         print_error(f"Backup directory missing: {backup_dir}")
         checks.append(False)
     
-    # Check PostgreSQL configuration
-    print_info("\n[3/8] Checking PostgreSQL WAL configuration...")
-    alf_base_dir = config.get('ALF_BASE_DIR')
-    if alf_base_dir:
-        try:
-            from alfresco_backup.utils.wal_config_check import check_wal_configuration
-        except ImportError:
-            import importlib
-            check_wal_configuration = importlib.import_module('wal_config_check').check_wal_configuration
-        
-        # Create a simple config object
-        class Config:
-            def __init__(self, alf_base_dir):
-                self.alf_base_dir = Path(alf_base_dir)
-        
-        result = check_wal_configuration(Config(alf_base_dir))
-        
-        if result['success']:
-            print_success("PostgreSQL WAL configuration is valid")
-            settings = result.get('settings', {})
-            print_info(f"  wal_level: {settings.get('wal_level', 'not set')}")
-            print_info(f"  archive_mode: {settings.get('archive_mode', 'not set')}")
-            print_info(f"  archive_command: {settings.get('archive_command', 'not set')[:50]}...")
-            checks.append(True)
-        else:
-            print_error("PostgreSQL WAL configuration issues:")
-            if result.get('error'):
-                print_error(f"  {result['error']}")
-            checks.append(False)
-        
-        for warning in result.get('warnings', []):
-            warnings.append(f"PostgreSQL: {warning}")
-    else:
-        print_warning("Cannot verify PostgreSQL config - ALF_BASE_DIR not set")
-        checks.append(False)
-    
-    # Check replication privilege
-    print_info("\n[4/8] Ensuring replication privilege (auto TCP fix)...")
-    pg_data_dir_path = Path(config.get('ALF_BASE_DIR', '/opt/alfresco')) / 'alf_data' / 'postgresql'
-    psql_binary = Path(config.get('ALF_BASE_DIR', '/opt/alfresco')) / 'postgresql' / 'bin' / 'psql'
-    pg_ctl_bin = Path(config.get('ALF_BASE_DIR', '/opt/alfresco')) / 'postgresql' / 'bin' / 'pg_ctl'
-
-    if psql_binary.exists() and pg_ctl_bin.exists() and pg_data_dir_path.exists():
-        if ensure_replication_privilege_for_alfresco(
-            str(pg_data_dir_path), str(psql_binary), str(pg_ctl_bin)
-        ):
-            print_success("Replication privilege confirmed and configuration cleaned up.")
-            checks.append(True)
-        else:
-            print_error("Automatic replication privilege setup failed.")
-            checks.append(False)
-            return False
-    else:
-        print_error("Cannot locate PostgreSQL binaries or data directory for replication fix.")
-        checks.append(False)
-    
     # Check virtual environment
-    print_info("\n[5/8] Checking Python virtual environment...")
+    print_info("\n[3/6] Checking Python virtual environment...")
     venv_python = Path('venv/bin/python')
     if venv_python.exists():
         print_success("Virtual environment exists")
@@ -1092,7 +1035,8 @@ def verify_installation():
         checks.append(False)
     
     # Check contentstore path
-    print_info("\n[6/8] Checking Alfresco contentstore path...")
+    alf_base_dir = config.get('ALF_BASE_DIR')
+    print_info("\n[4/6] Checking Alfresco contentstore path...")
     if alf_base_dir:
         contentstore_path = Path(alf_base_dir) / 'alf_data' / 'contentstore'
         if contentstore_path.exists():
@@ -1107,7 +1051,7 @@ def verify_installation():
         checks.append(False)
     
     # Check backup script permissions
-    print_info("\n[7/8] Checking backup script...")
+    print_info("\n[5/6] Checking backup script...")
     backup_script = Path('backup.py')
     if backup_script.exists():
         print_success("backup.py exists")
@@ -1121,7 +1065,7 @@ def verify_installation():
         checks.append(False)
     
     # Check cron job
-    print_info("\n[8/8] Checking cron job configuration...")
+    print_info("\n[6/6] Checking cron job configuration...")
     real_user, real_uid, real_gid = get_real_user()
     running_as_root = is_running_as_root()
     
@@ -1198,23 +1142,16 @@ def main():
     # Step 3: Create directories
     create_directories()
     
-    # Step 4: Configure WAL directory
-    configure_wal_archive()
-    
-    # Step 5: Configure PostgreSQL automatically
-    configure_postgresql()
-    
-    # Step 6: Create virtual environment
+    # Step 4: Create virtual environment
     create_virtual_environment()
     
-    # Step 7: Configure cron job
+    # Step 5: Configure cron job
     configure_cron_job()
     
-    # Step 8: Verify
+    # Step 6: Verify
     verify_installation()
     
     print_header("Setup Complete!")
-    print_info("Review the instructions above for PostgreSQL configuration.")
     print_info("See README.md for detailed documentation.")
 
 def ensure_replication_privilege_for_alfresco(

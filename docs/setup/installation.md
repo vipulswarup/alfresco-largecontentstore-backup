@@ -1,13 +1,14 @@
 # Setup & Installation
 
-This guide walks through every step required to deploy the Alfresco Backup System, from prerequisites to WAL configuration. Follow it sequentially or jump to the section that matches your deployment approach.
+This guide walks through every step required to deploy the Alfresco Backup System. Follow it sequentially or jump to the section that matches your deployment approach.
 
 ## Requirements
 
 - Python 3.7+
-- PostgreSQL client tools (`pg_basebackup`)
+- PostgreSQL client tools (`pg_dump`, `psql`)
 - `rsync`
-- Sufficient disk space for database and contentstore snapshots
+- `gzip` (standard on most Linux systems)
+- Sufficient disk space for database SQL dumps and contentstore snapshots
 
 The automated setup wizard verifies each requirement and explains how to resolve missing dependencies.
 
@@ -24,13 +25,11 @@ sudo python3 setup.py
 
 The wizard performs the following:
 
-1. Confirms required binaries (`python3`, `pg_basebackup`, `rsync`, `sudo`).
+1. Confirms required binaries (`python3`, `pg_dump`, `psql`, `rsync`, `gzip`, `sudo`).
 2. Builds the `.env` file interactively.
-3. Creates `BACKUP_DIR` and subdirectories with correct ownership.
-4. Configures WAL archive permissions and updates `postgresql.conf` / `pg_hba.conf` with PostgreSQL 9.4–compatible settings.
-5. Restarts Alfresco and grants replication privileges to the backup user.
-6. Creates a dedicated Python virtual environment and installs dependencies.
-7. Offers to create a cron job and runs a final verification pass.
+3. Creates `BACKUP_DIR` and subdirectories (`postgres/`, `contentstore/`) with correct ownership.
+4. Creates a dedicated Python virtual environment and installs dependencies.
+5. Offers to create a cron job and runs a final verification pass.
 
 If any step encounters issues, the wizard surfaces actionable remediation instructions and highlights what should be completed manually.
 
@@ -42,7 +41,7 @@ Use the manual workflow when you prefer explicit control over each step or when 
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-venv postgresql-client rsync
+sudo apt-get install -y python3 python3-pip python3-venv postgresql-client rsync gzip
 ```
 
 ### 2. Repository & Virtual Environment
@@ -86,7 +85,7 @@ BACKUP_DIR=/mnt/backups/alfresco
 ALF_BASE_DIR=/opt/alfresco
 
 # Retention Policy
-RETENTION_DAYS=30
+RETENTION_DAYS=7
 
 # Email Alerts (optional)
 SMTP_HOST=smtp.gmail.com
@@ -106,38 +105,25 @@ chmod 600 .env
 chmod +x backup.py restore.py
 ```
 
-## PostgreSQL WAL Configuration
+## PostgreSQL Connection
 
-Point-in-time recovery and base backups require WAL archiving. The setup wizard automates the configuration for Alfresco’s embedded PostgreSQL 9.4, but the steps can be performed manually:
+The backup system uses `pg_dump` to create SQL dumps, which requires standard database connectivity. No special PostgreSQL configuration is needed beyond normal database access.
 
-1. Locate `postgresql.conf` (typically under `ALF_BASE_DIR/postgresql/` or `ALF_BASE_DIR/alf_data/postgresql/`).
-2. Ensure the following settings are present:
+Ensure:
+1. The backup user specified in `PGUSER` has connect privileges to the database.
+2. `PGPASSWORD` is correctly set in the `.env` file.
+3. PostgreSQL is accessible from the backup host (typically `localhost` for embedded Alfresco PostgreSQL).
 
-   ```conf
-   wal_level = hot_standby
-   archive_mode = on
-   archive_command = 'test ! -f /mnt/backups/alfresco/pg_wal/%f && cp %p /mnt/backups/alfresco/pg_wal/%f'
-   max_wal_senders = 3
-   wal_keep_segments = 64
-   ```
-
-3. Update `pg_hba.conf` to allow replication connections from the backup user over local socket and loopback interfaces.
-4. Create the WAL archive directory (`BACKUP_DIR/pg_wal`) and set ownership to both the PostgreSQL service user and the operational user (e.g., `postgres:evadm`).
-5. Restart Alfresco/PostgreSQL and grant the replication privilege:
-
-   ```bash
-   psql -h localhost -U PGSUPERUSER -d postgres -c "ALTER USER PGUSER REPLICATION;"
-   ```
+The system will automatically use embedded PostgreSQL binaries if available (e.g., `ALF_BASE_DIR/postgresql/bin/pg_dump`), otherwise it falls back to system-installed tools.
 
 ## Environment Variable Reference
 
 | Variable | Description |
 | --- | --- |
-| `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` | Connection parameters for Alfresco’s PostgreSQL instance. |
-| `PGSUPERUSER` | PostgreSQL role with privileges to grant replication (defaults to `postgres`). |
-| `BACKUP_DIR` | Root directory for storing backups (`postgres/`, `contentstore/`, `pg_wal/`). |
+| `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` | Connection parameters for Alfresco's PostgreSQL instance. |
+| `BACKUP_DIR` | Root directory for storing backups (`postgres/`, `contentstore/`). |
 | `ALF_BASE_DIR` | Alfresco installation directory containing scripts and data. |
-| `RETENTION_DAYS` | Number of days to retain backups before cleanup. |
+| `RETENTION_DAYS` | Number of days to retain backups before cleanup (default: 7). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | SMTP credentials for failure notifications (optional). |
 | `ALERT_EMAIL`, `ALERT_FROM` | Notification recipient and sender addresses. |
 
@@ -145,5 +131,6 @@ Point-in-time recovery and base backups require WAL archiving. The setup wizard 
 
 - Activate the virtual environment and run `python backup.py --help` to confirm dependencies.
 - Verify the cron log directory (if scheduled) is writable by the Alfresco user.
-- Confirm that WAL files appear in `BACKUP_DIR/pg_wal` after forcing a WAL switch (`SELECT pg_switch_xlog();` on PostgreSQL 9.4).
+- Run a test backup (`python backup.py`) and verify SQL dump files are created in `BACKUP_DIR/postgres/`.
+- Confirm backup files have reasonable sizes (not empty or suspiciously small).
 - Review `../operations/backup-guide.md` to schedule backups and monitor results.

@@ -16,20 +16,18 @@ alfresco-largecontentstore-backup/
 
 ### `alfresco_backup.backup`
 - `__main__.py`: Orchestrates the full backup run (configuration, locking, logging, step execution, email alerts).
-- `postgres.py`: Executes `pg_basebackup` (preferring the embedded Alfresco binaries) and handles known PostgreSQL 9.4 quirks.
+- `postgres.py`: Executes `pg_dump` to create compressed SQL dump files (preferring embedded Alfresco binaries).
 - `contentstore.py`: Snapshots the contentstore via `rsync` with optional hardlink optimisation.
-- `retention.py`: Applies time-based retention across PostgreSQL backups, contentstore snapshots, and WAL files.
-- `wal.py`: Reports on archived WAL files for PITR readiness.
+- `retention.py`: Applies time-based retention policy to PostgreSQL SQL dumps and contentstore snapshots.
 - `email_alert.py`: Sends failure notifications when any backup step fails.
 
 ### `alfresco_backup.restore`
-- `__main__.py`: Interactive restore runner covering full restores, PITR, and targeted modes with progress feedback.
+- `__main__.py`: Interactive restore runner covering full system restores and component-level recovery with progress feedback.
 
 ### `alfresco_backup.utils`
 - `config.py`: Loads `.env` configuration values and enforces required settings.
 - `lock.py`: Provides a file-based guard to prevent concurrent backup executions.
 - `subprocess_utils.py`: Offers a consistent interface for long-running shell commands plus safe filesystem helpers.
-- `wal_config_check.py`: Validates that PostgreSQL WAL settings support backups and PITR.
 
 ## Entry Points
 
@@ -41,13 +39,13 @@ These wrappers ensure existing cron jobs or scripts that invoke the root-level f
 ## Backup Control Flow
 
 1. Load configuration and create the daily log file.
-2. Validate WAL settings and acquire the process lock.
-3. Run PostgreSQL base backup, contentstore snapshot, WAL archive inspection, and retention in order.
+2. Acquire the process lock to prevent concurrent executions.
+3. Run PostgreSQL SQL dump, contentstore snapshot, and retention policy in sequence.
 4. Summarise outcomes, release the lock, and emit alerts when needed.
 
 ## Restore Responsibilities
 
-The restore runner collects configuration interactively, validates selected backups, stops Alfresco safely, backs up current data, and restores PostgreSQL and contentstore assets. PITR mode extends this flow with recovery target configuration and WAL replay.
+The restore runner collects configuration interactively, validates selected backups, stops Alfresco safely, backs up current data, and restores PostgreSQL from SQL dumps and contentstore from snapshots. The system supports full system restores and component-level recovery (PostgreSQL-only or contentstore-only).
 
 ## Extension Guidelines
 
