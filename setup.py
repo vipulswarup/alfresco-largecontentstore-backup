@@ -746,7 +746,7 @@ def configure_postgresql():
 
 def create_virtual_environment():
     """Create Python virtual environment and install dependencies."""
-    print_header("Step 6: Create Virtual Environment")
+    print_header("Step 4: Create Virtual Environment")
     
     venv_path = Path('venv')
     real_user, real_uid, real_gid = get_real_user()
@@ -780,9 +780,10 @@ def create_virtual_environment():
             result = run_command([sys.executable, '-m', 'venv', 'venv'], check=True)
         
         if result is None:
-            print_success("Virtual environment created")
-        else:
+            print_error("Failed to create virtual environment")
             return False
+        
+        print_success("Virtual environment created")
         
         # Determine pip path
         pip_path = venv_path / 'bin' / 'pip'
@@ -797,9 +798,10 @@ def create_virtual_environment():
             result = run_command([str(pip_path), 'install', '-r', 'requirements.txt'], check=True)
         
         if result is None:
-            print_success("Dependencies installed")
-        else:
+            print_error("Failed to install dependencies")
             return False
+        
+        print_success("Dependencies installed")
         
         print_success(f"\nVirtual environment ready at: {venv_path.absolute()}")
         print_info("\nTo activate the virtual environment:")
@@ -813,7 +815,7 @@ def create_virtual_environment():
 
 def configure_cron_job():
     """Configure cron job for automated backups."""
-    print_header("Step 7: Configure Cron Job")
+    print_header("Step 5: Configure Cron Job")
     
     real_user, real_uid, real_gid = get_real_user()
     current_dir = Path.cwd().absolute()
