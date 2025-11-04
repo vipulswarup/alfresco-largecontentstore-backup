@@ -12,7 +12,7 @@ This guide summarises day-two operations: ongoing maintenance tasks, recommended
 - **Logs:**
   - `BACKUP_DIR/backup-YYYY-MM-DD.log`
   - `/var/log/alfresco-backup/cron-YYYY-MM-DD.log`
-- **Alerts:** SMTP credentials in `.env` trigger failure-only notifications
+- **Alerts:** Email alerts controlled by `EMAIL_ALERT_MODE` in `.env` (see Email Alerts section)
 
 ## Routine Maintenance
 
@@ -29,14 +29,14 @@ This guide summarises day-two operations: ongoing maintenance tasks, recommended
 - **Success rate:** >99% of scheduled backups complete without error.
 - **Backup duration:** Track PostgreSQL SQL dump and contentstore durations from the log file; investigate significant increases.
 - **Disk utilisation:** Keep backup volume below 80% capacity. Monitor SQL dump file sizes for anomalies.
-- **Email delivery:** Send a synthetic failure alert quarterly to confirm SMTP configuration.
+- **Email delivery:** If `EMAIL_ALERT_MODE` is not set to `none`, send a synthetic failure alert quarterly to confirm SMTP configuration.
 - **Restore readiness:** Document successful restore drills, target recovery time (RTO < 2 hours) and recovery point (RPO < 24 hours, determined by backup frequency).
 
 ## Security Checklist
 
 - `.env` permissions set to `600`; never commit secrets to version control.
 - Backup directories owned by the Alfresco service account; restrict access to trusted users (`chmod 750` or tighter as policy dictates).
-- SMTP credentials stored securely and rotated periodically.
+- SMTP credentials stored securely and rotated periodically (only required if `EMAIL_ALERT_MODE` is not `none`).
 - Regular OS patching (`sudo apt-get update && sudo apt-get upgrade`) on the backup host.
 - Consider encrypting off-site copies if backups are replicated externally.
 - SQL dump files contain sensitive data; ensure proper access controls on backup storage.

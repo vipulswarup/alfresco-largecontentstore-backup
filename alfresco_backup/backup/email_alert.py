@@ -1,4 +1,4 @@
-"""Email alerting for backup failures."""
+"""Email alerting for backup failures and successes."""
 
 import logging
 import smtplib
@@ -15,7 +15,7 @@ def send_failure_alert(backup_results, config):
         backup_results: dict with results from all backup operations
         config: BackupConfig instance
     """
-    if not getattr(config, 'email_enabled', True):
+    if not getattr(config, 'email_enabled', True) or getattr(config, 'email_alert_mode', 'failure_only') == 'none':
         logging.getLogger(__name__).warning(
             "Email alerts disabled; skipping failure notification."
         )
@@ -118,4 +118,133 @@ def send_failure_alert(backup_results, config):
     
     except Exception as e:
         print(f"ERROR: Failed to send email alert: {str(e)}")
+
+
+def send_success_alert(backup_results, config):
+    """
+    Send email alert with detailed success information.
+    
+    Args:
+        backup_results: dict with results from all backup operations
+        config: BackupConfig instance
+    """
+    if not getattr(config, 'email_enabled', True) or getattr(config, 'email_alert_mode', 'failure_only') == 'none':
+        logging.getLogger(__name__).warning(
+            "Email alerts disabled; skipping success notification."
+        )
+        return
+    
+    subject = f"SUCCESS: Alfresco Backup Completed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    
+    # Build detailed email body
+    body_parts = [
+        "Alfresco backup process completed successfully.\n",
+        "=" * 70,
+        "\nBACKUP SUMMARY\n",
+        "=" * 70,
+    ]
+    
+    # PostgreSQL backup details
+    body_parts.append("\n" + "=" * 70)
+    body_parts.append("\nPOSTGRESQL BACKUP")
+    body_parts.append("\n" + "=" * 70)
+    pg_result = backup_results.get('postgres', {})
+    if pg_result.get('success'):
+        body_parts.append(f"\nStatus: SUCCESS")
+        body_parts.append(f"Path: {pg_result.get('path')}")
+        body_parts.append(f"Duration: {pg_result.get('duration', 0):.2f} seconds")
+        
+        # Add size information
+        uncompressed_mb = pg_result.get('size_uncompressed_mb', 0)
+        compressed_mb = pg_result.get('size_compressed_mb', 0)
+        if uncompressed_mb > 0:
+            if uncompressed_mb >= 1024:
+                body_parts.append(f"Uncompressed size: {uncompressed_mb/1024:.2f} GB")
+            else:
+                body_parts.append(f"Uncompressed size: {uncompressed_mb:.2f} MB")
+        if compressed_mb > 0:
+            if compressed_mb >= 1024:
+                body_parts.append(f"Compressed size: {compressed_mb/1024:.2f} GB")
+            else:
+                body_parts.append(f"Compressed size: {compressed_mb:.2f} MB")
+            if uncompressed_mb > 0:
+                compression_ratio = (1 - compressed_mb / uncompressed_mb) * 100
+                body_parts.append(f"Compression ratio: {compression_ratio:.1f}%")
+    else:
+        body_parts.append(f"\nStatus: FAILED")
+        body_parts.append(f"Error: {pg_result.get('error', 'Unknown error')}")
+    
+    # Contentstore backup details
+    body_parts.append("\n" + "=" * 70)
+    body_parts.append("\nCONTENTSTORE BACKUP")
+    body_parts.append("\n" + "=" * 70)
+    cs_result = backup_results.get('contentstore', {})
+    if cs_result.get('success'):
+        body_parts.append(f"\nStatus: SUCCESS")
+        body_parts.append(f"Path: {cs_result.get('path')}")
+        body_parts.append(f"Duration: {cs_result.get('duration', 0):.2f} seconds")
+        
+        # Add size information
+        total_mb = cs_result.get('total_size_mb', 0)
+        additional_mb = cs_result.get('additional_size_mb', 0)
+        if total_mb > 0:
+            if total_mb >= 1024:
+                body_parts.append(f"Total backup size: {total_mb/1024:.2f} GB")
+            else:
+                body_parts.append(f"Total backup size: {total_mb:.2f} MB")
+        if additional_mb > 0:
+            if additional_mb >= 1024:
+                body_parts.append(f"Additional data backed up: {additional_mb/1024:.2f} GB")
+            else:
+                body_parts.append(f"Additional data backed up: {additional_mb:.2f} MB")
+        else:
+            body_parts.append(f"Additional data backed up: 0 MB (all files hardlinked from previous backup)")
+    else:
+        body_parts.append(f"\nStatus: FAILED")
+        body_parts.append(f"Error: {cs_result.get('error', 'Unknown error')}")
+    
+    # Retention policy details
+    body_parts.append("\n" + "=" * 70)
+    body_parts.append("\nRETENTION POLICY")
+    body_parts.append("\n" + "=" * 70)
+    ret_result = backup_results.get('retention', {})
+    if ret_result.get('success'):
+        body_parts.append(f"\nStatus: SUCCESS")
+        deleted = ret_result.get('deleted_items', [])
+        if deleted:
+            body_parts.append(f"\nDeleted items:")
+            for item in deleted:
+                body_parts.append(f"  - {item}")
+        else:
+            body_parts.append(f"\nNo items to delete (within retention period)")
+    else:
+        body_parts.append(f"\nStatus: FAILED")
+        if ret_result.get('error'):
+            body_parts.append(f"\nError details:\n{ret_result.get('error')}")
+    
+    # Log file location
+    body_parts.append("\n" + "=" * 70)
+    body_parts.append(f"\nLog file: {backup_results.get('log_file', 'unknown')}")
+    body_parts.append("\n" + "=" * 70)
+    
+    body = '\n'.join(body_parts)
+    
+    # Send email
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = config.alert_from
+        msg['To'] = config.alert_email
+        msg['Subject'] = subject
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
+            server.starttls()
+            server.login(config.smtp_user, config.smtp_password)
+            server.send_message(msg)
+        
+        logging.info(f"Success email sent to {config.alert_email}")
+    
+    except Exception as e:
+        logging.error(f"ERROR: Failed to send success email: {str(e)}")
 

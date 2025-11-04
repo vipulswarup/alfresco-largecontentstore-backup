@@ -124,8 +124,9 @@ The system will automatically use embedded PostgreSQL binaries if available (e.g
 | `BACKUP_DIR` | Root directory for storing backups (`postgres/`, `contentstore/`). |
 | `ALF_BASE_DIR` | Alfresco installation directory containing scripts and data. |
 | `RETENTION_DAYS` | Number of days to retain backups before cleanup (default: 7). |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | SMTP credentials for failure notifications (optional). |
-| `ALERT_EMAIL`, `ALERT_FROM` | Notification recipient and sender addresses. |
+| `EMAIL_ALERT_MODE` | Email alert mode: `both` (success and failure), `failure_only` (failure only, default), or `none` (disabled). |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | SMTP credentials for email notifications (required if email alerts are enabled). |
+| `ALERT_EMAIL`, `ALERT_FROM` | Notification recipient and sender addresses (required if email alerts are enabled). |
 
 ## Post-Installation Checklist
 

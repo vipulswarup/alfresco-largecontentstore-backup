@@ -64,6 +64,16 @@ class BackupConfig:
             sys.exit(1)
         
         # Email settings
+        email_alert_mode = os.getenv('EMAIL_ALERT_MODE', 'failure_only').lower()
+        if email_alert_mode not in ['both', 'failure_only', 'none']:
+            print(f"WARNING: Invalid EMAIL_ALERT_MODE '{email_alert_mode}', using 'failure_only'")
+            email_alert_mode = 'failure_only'
+        self.email_alert_mode = email_alert_mode
+        
+        # If mode is "none", treat as if email is disabled
+        if email_alert_mode == 'none':
+            self.email_enabled = False
+        
         if self.email_enabled:
             self.smtp_host = os.getenv('SMTP_HOST')
             self.smtp_port = int(os.getenv('SMTP_PORT'))

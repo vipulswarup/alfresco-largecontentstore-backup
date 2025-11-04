@@ -17,14 +17,14 @@ try:
     from alfresco_backup.backup.postgres import backup_postgres
     from alfresco_backup.backup.contentstore import backup_contentstore
     from alfresco_backup.backup.retention import apply_retention
-    from alfresco_backup.backup.email_alert import send_failure_alert
+    from alfresco_backup.backup.email_alert import send_failure_alert, send_success_alert
 except ImportError:  # pragma: no cover
     from ..utils.config import BackupConfig
     from ..utils.lock import FileLock
     from .postgres import backup_postgres
     from .contentstore import backup_contentstore
     from .retention import apply_retention
-    from .email_alert import send_failure_alert
+    from .email_alert import send_failure_alert, send_success_alert
 
 
 def setup_logging(backup_dir):
@@ -180,11 +180,15 @@ def main():
                 logging.info("=" * 70)
                 if any_failure:
                     logging.error("Backup completed with FAILURES")
-                    logging.info("Sending failure alert email...")
-                    send_failure_alert(backup_results, config)
+                    if config.email_enabled and config.email_alert_mode != 'none':
+                        logging.info("Sending failure alert email...")
+                        send_failure_alert(backup_results, config)
                     sys.exit(1)
                 else:
                     logging.info("Backup completed successfully")
+                    if config.email_enabled and config.email_alert_mode == 'both':
+                        logging.info("Sending success alert email...")
+                        send_success_alert(backup_results, config)
                 
                 logging.info("=" * 70)
         

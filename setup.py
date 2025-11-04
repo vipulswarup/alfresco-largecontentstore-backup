@@ -184,10 +184,22 @@ def create_env_file():
     print_info("\n--- Retention Policy ---")
     retention_days = input(f"{Colors.OKCYAN}Retention period in days [7]: {Colors.ENDC}").strip() or '7'
     
-    print_info("\n--- Email Alerts (optional - only sent on failures) ---")
+    print_info("\n--- Email Alerts (optional) ---")
     configure_email = ask_yes_no("Configure email alerts?", default=False)
     
     if configure_email:
+        print_info("\nEmail alert mode:")
+        print_info("  - 'both': Send emails on both successful and failed backups")
+        print_info("  - 'failure_only': Send emails only on failed backups (default)")
+        print_info("  - 'none': Disable email alerts")
+        email_alert_mode_input = input(f"{Colors.OKCYAN}Email alert mode [failure_only]: {Colors.ENDC}").strip().lower()
+        if email_alert_mode_input not in ['both', 'failure_only', 'none']:
+            if email_alert_mode_input:
+                print_warning(f"Invalid mode '{email_alert_mode_input}', using 'failure_only'")
+            email_alert_mode = 'failure_only'
+        else:
+            email_alert_mode = email_alert_mode_input
+        
         smtp_host = input(f"{Colors.OKCYAN}SMTP host [smtp.gmail.com]: {Colors.ENDC}").strip() or 'smtp.gmail.com'
         smtp_port = input(f"{Colors.OKCYAN}SMTP port [587]: {Colors.ENDC}").strip() or '587'
         smtp_user = input(f"{Colors.OKCYAN}SMTP username: {Colors.ENDC}").strip()
@@ -195,6 +207,7 @@ def create_env_file():
         alert_email = input(f"{Colors.OKCYAN}Alert recipient email: {Colors.ENDC}").strip()
         alert_from = input(f"{Colors.OKCYAN}Alert from email [{smtp_user}]: {Colors.ENDC}").strip() or smtp_user
     else:
+        email_alert_mode = 'failure_only'
         smtp_host = smtp_port = smtp_user = smtp_password = alert_email = alert_from = ''
     
     # Write .env file
@@ -216,7 +229,9 @@ ALF_BASE_DIR={alf_base_dir}
 # Retention Policy
 RETENTION_DAYS={retention_days}
 
-# Email Alerts (only sent on failures)
+# Email Alerts
+# EMAIL_ALERT_MODE: "both" (send on success and failure), "failure_only" (send only on failure), or "none" (no emails)
+EMAIL_ALERT_MODE={email_alert_mode}
 SMTP_HOST={smtp_host}
 SMTP_PORT={smtp_port}
 SMTP_USER={smtp_user}

@@ -18,7 +18,7 @@ During execution the orchestrator:
 1. Loads configuration and creates the daily log file in `BACKUP_DIR`.
 2. Acquires the process lock to prevent concurrent executions.
 3. Runs PostgreSQL SQL dump, contentstore snapshot, and retention policy in sequence.
-4. Sends an email alert if any step fails.
+4. Sends email alerts based on `EMAIL_ALERT_MODE` configuration (see Email Alerts section).
 
 ## Scheduling with Cron
 
@@ -81,7 +81,13 @@ Each run creates:
 
 ## Email Alerts
 
-When any backup step fails the system sends a detailed email that summarises each component’s status, includes timestamps, and references the log file path. SMTP credentials and recipients are configured via `.env`.
+Email alerts are controlled by the `EMAIL_ALERT_MODE` setting in `.env`:
+
+- **`failure_only`** (default): Send emails only when backups fail
+- **`both`**: Send emails on both successful and failed backups
+- **`none`**: Disable all email alerts
+
+When enabled, emails include detailed information about each component's status, timestamps, size information, and log file path. SMTP credentials and recipients are configured via `.env`.
 
 ## Performance Notes
 
