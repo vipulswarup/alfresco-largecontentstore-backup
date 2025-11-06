@@ -20,15 +20,24 @@ def send_failure_alert(backup_results, config):
             "Email alerts disabled; skipping failure notification."
         )
         return
-    subject = f"ALERT: Alfresco Backup Failed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     
-    # Build detailed email body
-    body_parts = [
-        "Alfresco backup process encountered failures.\n",
-        "=" * 70,
-        "\nFAILURE SUMMARY\n",
-        "=" * 70,
-    ]
+    customer_name = getattr(config, 'customer_name', '').strip()
+    if customer_name:
+        subject = f"ALERT: Alfresco Backup Failed - {customer_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        body_parts = [
+            f"Alfresco backup process encountered failures for: {customer_name}\n",
+            "=" * 70,
+            f"\nFAILURE SUMMARY - {customer_name}\n",
+            "=" * 70,
+        ]
+    else:
+        subject = f"ALERT: Alfresco Backup Failed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        body_parts = [
+            "Alfresco backup process encountered failures.\n",
+            "=" * 70,
+            "\nFAILURE SUMMARY\n",
+            "=" * 70,
+        ]
     
     # Check each operation
     failed_operations = []
@@ -134,15 +143,23 @@ def send_success_alert(backup_results, config):
         )
         return
     
-    subject = f"SUCCESS: Alfresco Backup Completed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-    
-    # Build detailed email body
-    body_parts = [
-        "Alfresco backup process completed successfully.\n",
-        "=" * 70,
-        "\nBACKUP SUMMARY\n",
-        "=" * 70,
-    ]
+    customer_name = getattr(config, 'customer_name', '').strip()
+    if customer_name:
+        subject = f"SUCCESS: Alfresco Backup Completed - {customer_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        body_parts = [
+            f"Alfresco backup process completed successfully for: {customer_name}\n",
+            "=" * 70,
+            f"\nBACKUP SUMMARY - {customer_name}\n",
+            "=" * 70,
+        ]
+    else:
+        subject = f"SUCCESS: Alfresco Backup Completed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        body_parts = [
+            "Alfresco backup process completed successfully.\n",
+            "=" * 70,
+            "\nBACKUP SUMMARY\n",
+            "=" * 70,
+        ]
     
     # PostgreSQL backup details
     body_parts.append("\n" + "=" * 70)

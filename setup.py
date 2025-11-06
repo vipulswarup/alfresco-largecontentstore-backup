@@ -247,6 +247,22 @@ def create_env_file():
     print_info("\n--- Retention Policy ---")
     retention_days = input(f"{Colors.OKCYAN}Retention period in days [7]: {Colors.ENDC}").strip() or '7'
     
+    print_info("\n--- Customer Name (optional) ---")
+    print_info("Customer name will be displayed prominently in email alerts")
+    customer_name = input(f"{Colors.OKCYAN}Customer name (for email alerts): {Colors.ENDC}").strip()
+    
+    print_info("\n--- Contentstore Backup Timeout (optional) ---")
+    print_info("For large contentstores, you may need to increase this timeout")
+    timeout_hours = input(f"{Colors.OKCYAN}Contentstore backup timeout in hours [24]: {Colors.ENDC}").strip() or '24'
+    try:
+        timeout_hours_int = int(timeout_hours)
+        if timeout_hours_int < 1:
+            print_warning("Timeout must be at least 1 hour, using 24 hours")
+            timeout_hours = '24'
+    except ValueError:
+        print_warning("Invalid timeout value, using 24 hours")
+        timeout_hours = '24'
+    
     print_info("\n--- Email Alerts (optional) ---")
     configure_email = ask_yes_no("Configure email alerts?", default=False)
     
@@ -291,6 +307,12 @@ ALF_BASE_DIR={alf_base_dir}
 
 # Retention Policy
 RETENTION_DAYS={retention_days}
+
+# Customer Name (optional, displayed prominently in email alerts)
+CUSTOMER_NAME={customer_name}
+
+# Contentstore Backup Timeout (optional, in hours, default 24)
+CONTENTSTORE_TIMEOUT_HOURS={timeout_hours}
 
 # Email Alerts
 # EMAIL_ALERT_MODE: "both" (send on success and failure), "failure_only" (send only on failure), or "none" (no emails)
@@ -1360,6 +1382,11 @@ def create_restore_env_file():
         print_error("PostgreSQL password is required for restore operations")
         return False
     
+    # Collect customer name (optional)
+    print_info("\n--- Customer Name (optional) ---")
+    print_info("Customer name will be displayed prominently in email alerts")
+    customer_name = input(f"{Colors.OKCYAN}Customer name (for email alerts): {Colors.ENDC}").strip()
+    
     # Collect Alfresco user
     real_user, real_uid, real_gid = get_real_user()
     print_info("\n--- Alfresco OS User ---")
@@ -1377,6 +1404,9 @@ PGDATABASE={pg_database}
 # Path Configuration
 BACKUP_DIR={backup_dir}
 ALF_BASE_DIR={alf_base_dir}
+
+# Customer Name (optional, displayed prominently in email alerts)
+CUSTOMER_NAME={customer_name}
 
 # Alfresco OS User
 ALFRESCO_USER={alfresco_user}

@@ -63,6 +63,17 @@ class BackupConfig:
             print("ERROR: RETENTION_DAYS must be an integer")
             sys.exit(1)
         
+        # Customer name (optional, for email alerts)
+        self.customer_name = os.getenv('CUSTOMER_NAME', '').strip()
+        
+        # Contentstore backup timeout (optional, in seconds, default 24 hours)
+        try:
+            timeout_hours = int(os.getenv('CONTENTSTORE_TIMEOUT_HOURS', '24'))
+            self.contentstore_timeout = timeout_hours * 3600
+        except ValueError:
+            print("WARNING: Invalid CONTENTSTORE_TIMEOUT_HOURS, using 24 hours")
+            self.contentstore_timeout = 86400
+        
         # Email settings
         email_alert_mode = os.getenv('EMAIL_ALERT_MODE', 'failure_only').lower()
         if email_alert_mode not in ['both', 'failure_only', 'none']:

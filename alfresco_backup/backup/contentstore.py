@@ -82,8 +82,9 @@ def backup_contentstore(config):
     # Ensure source path has trailing slash
     cmd.extend([f'{source}/', f'{destination}/'])
     
-    # Use common subprocess runner
-    runner = SubprocessRunner(timeout=28800)  # 8 hour timeout for large contentstore
+    # Use common subprocess runner with configurable timeout
+    timeout = getattr(config, 'contentstore_timeout', 86400)  # Default 24 hours
+    runner = SubprocessRunner(timeout=timeout)
     subprocess_result = runner.run_command(cmd)
     
     if subprocess_result['success']:
