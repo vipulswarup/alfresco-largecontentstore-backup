@@ -47,6 +47,7 @@ python backup.py
 - [Backup Operations Guide](docs/operations/backup-guide.md)
 - [Restore Runbook](docs/operations/restore-runbook.md)
 - [Restore Quick Reference](docs/operations/restore-cheatsheet.md)
+- [Disk Space Management](docs/operations/disk-space-management.md) — **Essential for large contentstores**
 - [Maintenance & Security Guide](docs/operations/maintenance-and-security.md)
 - [Architecture Overview](docs/architecture.md)
 
@@ -56,6 +57,7 @@ Each document covers a mutually exclusive topic; read them in combination for co
 
 - `alfresco_backup/` — Python package containing backup, restore, and utility modules
 - `backup.py`, `restore.py` — Legacy entry points that forward to the package orchestrators
+- `cleanup_backups.py` — Manual cleanup tool for removing old/failed backups
 - `docs/` — Consolidated documentation set (see map above)
 - `setup.py` — Interactive wizard for first-time installations
 

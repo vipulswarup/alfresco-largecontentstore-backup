@@ -23,6 +23,48 @@ def get_directory_size(path):
     return total_size
 
 
+def cleanup_failed_backups(contentstore_dir, last_link):
+    """
+    Clean up incomplete/failed backup attempts to free disk space.
+    A backup is considered failed if it's not the current 'last' symlink target.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    if not last_link.exists() or not last_link.is_symlink():
+        return  # No successful backup yet
+    
+    try:
+        last_backup = last_link.resolve()
+        
+        # Find all contentstore-* directories
+        for item in contentstore_dir.iterdir():
+            if item.is_dir() and item.name.startswith('contentstore-'):
+                # Skip if this is the last successful backup
+                if item.resolve() == last_backup:
+                    continue
+                
+                # Check if this is a recent directory (within last 24 hours)
+                # to avoid deleting backups that should be kept by retention policy
+                try:
+                    timestamp_str = item.name.replace('contentstore-', '')
+                    from datetime import datetime, timedelta
+                    backup_time = datetime.strptime(timestamp_str, '%Y-%m-%d_%H-%M-%S')
+                    age_hours = (datetime.now() - backup_time).total_seconds() / 3600
+                    
+                    # Only clean up very recent failed attempts (< 12 hours old)
+                    # Older backups will be handled by retention policy
+                    if age_hours < 12:
+                        logger.warning(f"Cleaning up recent failed backup attempt: {item.name}")
+                        import shutil
+                        shutil.rmtree(item)
+                        logger.info(f"Removed incomplete backup: {item.name}")
+                except (ValueError, Exception) as e:
+                    logger.warning(f"Could not process {item.name}: {e}")
+    except Exception as e:
+        logger.error(f"Error during failed backup cleanup: {e}")
+
+
 def backup_contentstore(config):
     """
     Execute contentstore backup using rsync with hardlink strategy.
@@ -38,6 +80,9 @@ def backup_contentstore(config):
     source = config.alf_base_dir / 'alf_data' / 'contentstore'
     destination = contentstore_dir / f'contentstore-{timestamp_str}'
     last_link = contentstore_dir / 'last'
+    
+    # Clean up any recent failed backup attempts first
+    cleanup_failed_backups(contentstore_dir, last_link)
     
     result = {
         'success': False,
@@ -56,6 +101,23 @@ def backup_contentstore(config):
     except ValueError as e:
         result['error'] = f"Invalid path: {e}"
         return result
+    
+    # Check available disk space before starting
+    import shutil
+    disk_stat = shutil.disk_usage(contentstore_dir)
+    available_gb = disk_stat.free / (1024**3)
+    source_size = get_directory_size(source)
+    source_gb = source_size / (1024**3)
+    
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Disk space check: {available_gb:.1f} GB available, source is {source_gb:.1f} GB")
+    
+    # Warn if less than 20% of source size is available
+    # (rsync with hardlinks typically uses much less, but we need buffer for new/changed files)
+    if available_gb < (source_gb * 0.2):
+        logger.warning(f"Low disk space: only {available_gb:.1f} GB available for {source_gb:.1f} GB source")
+        logger.warning("Consider cleaning up old backups or using a larger disk")
     
     # Calculate size of previous backup if it exists (for fallback calculation)
     previous_backup_size = 0
