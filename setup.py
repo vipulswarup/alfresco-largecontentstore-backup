@@ -263,6 +263,23 @@ def create_env_file():
         print_warning("Invalid timeout value, using 24 hours")
         timeout_hours = '24'
     
+    print_info("\n--- Contentstore Parallel Threads (optional) ---")
+    print_info("For large backups (5TB+), use 4-8 threads for 2-4x speedup")
+    print_info("Each thread processes one top-level directory (typically year directories)")
+    print_info("Set to 1 to disable parallelization (slower but simpler)")
+    parallel_threads = input(f"{Colors.OKCYAN}Number of parallel threads [4]: {Colors.ENDC}").strip() or '4'
+    try:
+        parallel_threads_int = int(parallel_threads)
+        if parallel_threads_int < 1:
+            print_warning("Parallel threads must be at least 1, using 1")
+            parallel_threads = '1'
+        elif parallel_threads_int > 16:
+            print_warning("Parallel threads > 16 may cause issues, capping at 16")
+            parallel_threads = '16'
+    except ValueError:
+        print_warning("Invalid parallel threads value, using 4")
+        parallel_threads = '4'
+    
     print_info("\n--- Email Alerts (optional) ---")
     configure_email = ask_yes_no("Configure email alerts?", default=False)
     
@@ -313,6 +330,11 @@ CUSTOMER_NAME={customer_name}
 
 # Contentstore Backup Timeout (optional, in hours, default 24)
 CONTENTSTORE_TIMEOUT_HOURS={timeout_hours}
+
+# Contentstore Parallel Threads (optional, default 4, set to 1 to disable parallelization)
+# For large backups (5TB+), use 4-8 threads for 2-4x speedup
+# Each thread processes one top-level directory (typically year directories like 2020/, 2021/)
+CONTENTSTORE_PARALLEL_THREADS={parallel_threads}
 
 # Email Alerts
 # EMAIL_ALERT_MODE: "both" (send on success and failure), "failure_only" (send only on failure), or "none" (no emails)

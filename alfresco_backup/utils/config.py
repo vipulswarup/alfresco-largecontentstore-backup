@@ -74,6 +74,19 @@ class BackupConfig:
             print("WARNING: Invalid CONTENTSTORE_TIMEOUT_HOURS, using 24 hours")
             self.contentstore_timeout = 86400
         
+        # Contentstore parallel threads (optional, default 4, set to 1 to disable parallelization)
+        try:
+            self.contentstore_parallel_threads = int(os.getenv('CONTENTSTORE_PARALLEL_THREADS', '4'))
+            if self.contentstore_parallel_threads < 1:
+                print("WARNING: CONTENTSTORE_PARALLEL_THREADS must be >= 1, using 1")
+                self.contentstore_parallel_threads = 1
+            if self.contentstore_parallel_threads > 16:
+                print("WARNING: CONTENTSTORE_PARALLEL_THREADS > 16 may cause issues, capping at 16")
+                self.contentstore_parallel_threads = 16
+        except ValueError:
+            print("WARNING: Invalid CONTENTSTORE_PARALLEL_THREADS, using 4")
+            self.contentstore_parallel_threads = 4
+        
         # Email settings
         email_alert_mode = os.getenv('EMAIL_ALERT_MODE', 'failure_only').lower()
         if email_alert_mode not in ['both', 'failure_only', 'none']:
