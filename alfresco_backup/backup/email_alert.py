@@ -59,13 +59,47 @@ def send_failure_alert(backup_results, config):
     if pg_result.get('success'):
         body_parts.append(f"\nStatus: SUCCESS")
         body_parts.append(f"Path: {pg_result.get('path')}")
-        body_parts.append(f"Duration: {pg_result.get('duration', 0):.2f} seconds")
+        duration = pg_result.get('duration', 0)
+        if duration >= 3600:
+            body_parts.append(f"Duration: {duration/3600:.2f} hours ({duration:.0f} seconds)")
+        else:
+            body_parts.append(f"Duration: {duration/60:.1f} minutes ({duration:.0f} seconds)")
+        
+        # Add size information
+        uncompressed_mb = pg_result.get('size_uncompressed_mb', 0)
+        compressed_mb = pg_result.get('size_compressed_mb', 0)
+        if uncompressed_mb > 0:
+            if uncompressed_mb >= 1024:
+                body_parts.append(f"Uncompressed size: {uncompressed_mb/1024:.2f} GB")
+            else:
+                body_parts.append(f"Uncompressed size: {uncompressed_mb:.2f} MB")
+        if compressed_mb > 0:
+            if compressed_mb >= 1024:
+                body_parts.append(f"Compressed size: {compressed_mb/1024:.2f} GB")
+            else:
+                body_parts.append(f"Compressed size: {compressed_mb:.2f} MB")
     else:
         body_parts.append(f"\nStatus: FAILED")
-        body_parts.append(f"Path: {pg_result.get('path')}")
+        body_parts.append(f"Path: {pg_result.get('path', 'N/A')}")
         body_parts.append(f"Start time: {pg_result.get('start_time', 'unknown')}")
+        duration = pg_result.get('duration', 0)
+        if duration > 0:
+            if duration >= 3600:
+                body_parts.append(f"Duration before failure: {duration/3600:.2f} hours ({duration:.0f} seconds)")
+            else:
+                body_parts.append(f"Duration before failure: {duration/60:.1f} minutes ({duration:.0f} seconds)")
+        
         if pg_result.get('error'):
-            body_parts.append(f"\nError details:\n{pg_result.get('error')}")
+            body_parts.append(f"\nError details:")
+            body_parts.append(f"{pg_result.get('error')}")
+        
+        if pg_result.get('partial_size_mb'):
+            body_parts.append(f"\nPartial backup size: {pg_result.get('partial_size_mb'):.2f} MB ({pg_result.get('partial_size_mb')/1024:.2f} GB)")
+        
+        if pg_result.get('timeout_seconds'):
+            body_parts.append(f"\nTimeout limit: {pg_result.get('timeout_seconds')/3600:.2f} hours ({pg_result.get('timeout_seconds')} seconds)")
+            if pg_result.get('elapsed_before_timeout'):
+                body_parts.append(f"Elapsed before timeout: {pg_result.get('elapsed_before_timeout')/3600:.2f} hours")
     
     # Contentstore backup details
     body_parts.append("\n" + "=" * 70)
@@ -75,13 +109,69 @@ def send_failure_alert(backup_results, config):
     if cs_result.get('success'):
         body_parts.append(f"\nStatus: SUCCESS")
         body_parts.append(f"Path: {cs_result.get('path')}")
-        body_parts.append(f"Duration: {cs_result.get('duration', 0):.2f} seconds")
+        duration = cs_result.get('duration', 0)
+        if duration >= 3600:
+            body_parts.append(f"Duration: {duration/3600:.2f} hours ({duration:.0f} seconds)")
+        else:
+            body_parts.append(f"Duration: {duration/60:.1f} minutes ({duration:.0f} seconds)")
+        
+        # Add size information
+        total_mb = cs_result.get('total_size_mb', 0)
+        additional_mb = cs_result.get('additional_size_mb', 0)
+        if total_mb > 0:
+            if total_mb >= 1024:
+                body_parts.append(f"Total backup size: {total_mb/1024:.2f} GB")
+            else:
+                body_parts.append(f"Total backup size: {total_mb:.2f} MB")
+        if additional_mb > 0:
+            if additional_mb >= 1024:
+                body_parts.append(f"Additional data backed up: {additional_mb/1024:.2f} GB")
+            else:
+                body_parts.append(f"Additional data backed up: {additional_mb:.2f} MB")
+        
+        if cs_result.get('files_transferred'):
+            body_parts.append(f"Files processed: {cs_result.get('files_transferred'):,}")
     else:
         body_parts.append(f"\nStatus: FAILED")
-        body_parts.append(f"Path: {cs_result.get('path')}")
+        body_parts.append(f"Path: {cs_result.get('path', 'N/A')}")
         body_parts.append(f"Start time: {cs_result.get('start_time', 'unknown')}")
+        duration = cs_result.get('duration', 0)
+        if duration > 0:
+            if duration >= 3600:
+                body_parts.append(f"Duration before failure: {duration/3600:.2f} hours ({duration:.0f} seconds)")
+            else:
+                body_parts.append(f"Duration before failure: {duration/60:.1f} minutes ({duration:.0f} seconds)")
+        
         if cs_result.get('error'):
-            body_parts.append(f"\nError details:\n{cs_result.get('error')}")
+            body_parts.append(f"\nError details:")
+            body_parts.append(f"{cs_result.get('error')}")
+        
+        # Partial progress information
+        if cs_result.get('partial_size_mb'):
+            body_parts.append(f"\nPartial backup size: {cs_result.get('partial_size_mb'):.2f} MB ({cs_result.get('partial_size_mb')/1024:.2f} GB)")
+        
+        if cs_result.get('files_transferred'):
+            body_parts.append(f"Files transferred before failure: {cs_result.get('files_transferred'):,}")
+        
+        if cs_result.get('bytes_transferred'):
+            bytes_mb = cs_result.get('bytes_transferred', 0) / (1024 * 1024)
+            if bytes_mb >= 1024:
+                body_parts.append(f"Data transferred before failure: {bytes_mb/1024:.2f} GB ({cs_result.get('bytes_transferred'):,} bytes)")
+            else:
+                body_parts.append(f"Data transferred before failure: {bytes_mb:.2f} MB ({cs_result.get('bytes_transferred'):,} bytes)")
+        
+        if cs_result.get('timeout_seconds'):
+            body_parts.append(f"\nTimeout limit: {cs_result.get('timeout_seconds')/3600:.2f} hours ({cs_result.get('timeout_seconds')} seconds)")
+            if cs_result.get('elapsed_before_timeout'):
+                body_parts.append(f"Elapsed before timeout: {cs_result.get('elapsed_before_timeout')/3600:.2f} hours")
+        
+        # Include command output if available (truncated for email)
+        if cs_result.get('stderr'):
+            stderr_preview = cs_result.get('stderr', '')[:500]  # First 500 chars
+            body_parts.append(f"\nLast error output (preview):")
+            body_parts.append(f"{stderr_preview}")
+            if len(cs_result.get('stderr', '')) > 500:
+                body_parts.append(f"... (truncated, see log file for full output)")
     
     # Retention policy details
     body_parts.append("\n" + "=" * 70)

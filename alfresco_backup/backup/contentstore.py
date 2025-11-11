@@ -146,8 +146,35 @@ def backup_contentstore(config):
     
     # Use common subprocess runner with configurable timeout
     timeout = getattr(config, 'contentstore_timeout', 86400)  # Default 24 hours
+    result['timeout_seconds'] = timeout
     runner = SubprocessRunner(timeout=timeout)
+    
+    logger.info(f"Executing rsync command (timeout: {timeout/3600:.1f} hours)...")
+    logger.info(f"  Command: {' '.join(cmd[:5])}... [truncated]")
+    
     subprocess_result = runner.run_command(cmd)
+    
+    # Parse rsync stats for progress information (even on failure)
+    files_transferred = None
+    bytes_transferred = None
+    if subprocess_result.get('stdout'):
+        output = subprocess_result['stdout']
+        for line in output.split('\n'):
+            # Parse "Number of files: X (reg: Y, dir: Z)"
+            if 'Number of files:' in line:
+                try:
+                    # Extract total files
+                    parts = line.split('Number of files:')[1].split('(')[0].strip()
+                    files_transferred = int(parts.replace(',', ''))
+                except (ValueError, IndexError):
+                    pass
+            # Parse "Total transferred file size: X bytes"
+            if 'Total transferred file size:' in line:
+                try:
+                    size_str = line.split('Total transferred file size:')[1].split('bytes')[0].strip().replace(',', '')
+                    bytes_transferred = int(size_str)
+                except (ValueError, IndexError):
+                    pass
     
     if subprocess_result['success']:
         # Calculate backup sizes
@@ -178,6 +205,11 @@ def backup_contentstore(config):
             
             result['additional_size_mb'] = additional_size / (1024 * 1024)
         
+        # Store files transferred info
+        if files_transferred is not None:
+            result['files_transferred'] = files_transferred
+            logger.info(f"Files processed: {files_transferred:,}")
+        
         # Update the 'last' symlink to point to current backup
         try:
             if last_link.exists() or last_link.is_symlink():
@@ -190,7 +222,40 @@ def backup_contentstore(config):
         result['success'] = True
         result['duration'] = subprocess_result['duration']
     else:
+        # Failure case - capture partial results
         result['error'] = subprocess_result['error']
+        result['duration'] = subprocess_result.get('duration', 0)
+        
+        # Check if destination exists (partial backup)
+        if destination.exists():
+            try:
+                partial_size = get_directory_size(destination)
+                result['partial_size_mb'] = partial_size / (1024 * 1024)
+                logger.warning(f"Partial backup detected: {result['partial_size_mb']:.2f} MB ({result['partial_size_mb']/1024:.2f} GB)")
+            except Exception:
+                pass
+        
+        # Store progress information
+        if files_transferred is not None:
+            result['files_transferred'] = files_transferred
+            logger.warning(f"Files transferred before failure: {files_transferred:,}")
+        
+        if bytes_transferred is not None:
+            result['bytes_transferred'] = bytes_transferred
+            bytes_mb = bytes_transferred / (1024 * 1024)
+            logger.warning(f"Data transferred before failure: {bytes_mb:.2f} MB ({bytes_mb/1024:.2f} GB)")
+        
+        # Include timeout information if it was a timeout
+        if subprocess_result.get('timeout_seconds'):
+            result['timeout_seconds'] = subprocess_result['timeout_seconds']
+            result['elapsed_before_timeout'] = subprocess_result.get('elapsed_before_timeout', 0)
+            logger.error(f"Operation timed out after {subprocess_result.get('elapsed_before_timeout', 0)/3600:.2f} hours (limit: {subprocess_result['timeout_seconds']/3600:.2f} hours)")
+        
+        # Include stderr/stdout if available for debugging
+        if subprocess_result.get('stderr'):
+            result['stderr'] = subprocess_result['stderr']
+        if subprocess_result.get('stdout'):
+            result['stdout'] = subprocess_result['stdout']
     
     return result
 

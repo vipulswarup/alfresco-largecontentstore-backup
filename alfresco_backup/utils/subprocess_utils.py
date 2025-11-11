@@ -58,8 +58,17 @@ class SubprocessRunner:
                 if process.stdout:
                     result['error'] += f"\nSTDOUT: {process.stdout}"
         
-        except subprocess.TimeoutExpired:
-            result['error'] = f"Command timed out after {self.timeout} seconds"
+        except subprocess.TimeoutExpired as e:
+            elapsed = time.time() - start
+            result['duration'] = elapsed
+            result['error'] = f"Command timed out after {self.timeout} seconds ({self.timeout/3600:.2f} hours)"
+            result['timeout_seconds'] = self.timeout
+            result['elapsed_before_timeout'] = elapsed
+            # Try to capture any partial output if available
+            if hasattr(e, 'stdout') and e.stdout:
+                result['stdout'] = e.stdout.decode('utf-8', errors='replace') if isinstance(e.stdout, bytes) else str(e.stdout)
+            if hasattr(e, 'stderr') and e.stderr:
+                result['stderr'] = e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else str(e.stderr)
         except FileNotFoundError:
             result['error'] = f"Command not found: {cmd[0] if cmd else 'unknown'}"
         except Exception as e:

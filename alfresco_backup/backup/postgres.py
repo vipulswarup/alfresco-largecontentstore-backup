@@ -42,16 +42,19 @@ def backup_postgres(config):
         result['error'] = f"Invalid backup path: {e}"
         return result
     
+    import logging
+    logger = logging.getLogger(__name__)
+    
     # Use embedded PostgreSQL tools to avoid version mismatch
     # Alfresco has its own PostgreSQL 9.4 binaries that match the server version
     embedded_pg_dump = config.alf_base_dir / 'postgresql' / 'bin' / 'pg_dump'
     
     if embedded_pg_dump.exists():
         pg_dump_cmd = str(embedded_pg_dump)
-        print(f"Using embedded pg_dump: {pg_dump_cmd}")
+        logger.info(f"Using embedded pg_dump: {pg_dump_cmd}")
     else:
         pg_dump_cmd = 'pg_dump'
-        print(f"Embedded pg_dump not found, using system version: {pg_dump_cmd}")
+        logger.info(f"Embedded pg_dump not found, using system version: {pg_dump_cmd}")
     
     # Set PGPASSWORD for pg_dump
     env = {
@@ -76,6 +79,7 @@ def backup_postgres(config):
     # Run pg_dump first to temporary file to get uncompressed size
     try:
         # Step 1: Create uncompressed dump to measure size
+        logger.info("Step 1: Creating uncompressed SQL dump...")
         with open(temp_uncompressed, 'wb') as out_file:
             pg_dump_process = subprocess.Popen(
                 pg_dump_cmd_list,
@@ -89,7 +93,12 @@ def backup_postgres(config):
             if pg_dump_process.returncode != 0:
                 error_msg = pg_dump_stderr.decode('utf-8', errors='replace') if pg_dump_stderr else 'Unknown error'
                 result['error'] = f"pg_dump failed with exit code {pg_dump_process.returncode}: {error_msg}"
+                result['duration'] = (datetime.now() - start_time).total_seconds()
                 if temp_uncompressed.exists():
+                    partial_size = temp_uncompressed.stat().st_size
+                    if partial_size > 0:
+                        result['partial_size_mb'] = partial_size / (1024 * 1024)
+                        logger.error(f"pg_dump failed but partial dump exists: {result['partial_size_mb']:.2f} MB")
                     temp_uncompressed.unlink()
                 return result
         
@@ -97,11 +106,17 @@ def backup_postgres(config):
         if temp_uncompressed.exists():
             uncompressed_size = temp_uncompressed.stat().st_size
             result['size_uncompressed_mb'] = uncompressed_size / (1024 * 1024)
+            if uncompressed_size >= 1024 * 1024 * 1024:
+                logger.info(f"Uncompressed dump size: {uncompressed_size / (1024**3):.2f} GB")
+            else:
+                logger.info(f"Uncompressed dump size: {uncompressed_size / (1024**2):.2f} MB")
         else:
             result['error'] = "pg_dump completed but no output file was created"
+            result['duration'] = (datetime.now() - start_time).total_seconds()
             return result
         
         # Step 2: Compress the dump file
+        logger.info("Step 2: Compressing SQL dump with gzip...")
         with open(temp_uncompressed, 'rb') as in_file:
             with open(backup_file, 'wb') as out_file:
                 gzip_process = subprocess.Popen(
@@ -116,6 +131,7 @@ def backup_postgres(config):
                 if gzip_process.returncode != 0:
                     error_msg = gzip_stderr.decode('utf-8', errors='replace') if gzip_stderr else 'Unknown error'
                     result['error'] = f"gzip failed with exit code {gzip_process.returncode}: {error_msg}"
+                    result['duration'] = (datetime.now() - start_time).total_seconds()
                     if backup_file.exists():
                         backup_file.unlink()
                     if temp_uncompressed.exists():
@@ -126,8 +142,16 @@ def backup_postgres(config):
         if backup_file.exists():
             compressed_size = backup_file.stat().st_size
             result['size_compressed_mb'] = compressed_size / (1024 * 1024)
+            if compressed_size >= 1024 * 1024 * 1024:
+                logger.info(f"Compressed dump size: {compressed_size / (1024**3):.2f} GB")
+            else:
+                logger.info(f"Compressed dump size: {compressed_size / (1024**2):.2f} MB")
+            if uncompressed_size > 0:
+                compression_ratio = (1 - compressed_size / uncompressed_size) * 100
+                logger.info(f"Compression ratio: {compression_ratio:.1f}%")
         else:
             result['error'] = "gzip completed but no compressed file was created"
+            result['duration'] = (datetime.now() - start_time).total_seconds()
             if temp_uncompressed.exists():
                 temp_uncompressed.unlink()
             return result
@@ -146,13 +170,27 @@ def backup_postgres(config):
                 backup_file.unlink()
     
     except subprocess.TimeoutExpired:
-        result['error'] = f"Backup timed out after 2 hours"
+        elapsed = (datetime.now() - start_time).total_seconds()
+        result['duration'] = elapsed
+        result['error'] = f"Backup timed out after {elapsed/3600:.2f} hours"
+        result['timeout_seconds'] = 7200  # 2 hours default
+        result['elapsed_before_timeout'] = elapsed
+        # Check for partial dump
+        if temp_uncompressed.exists():
+            partial_size = temp_uncompressed.stat().st_size
+            if partial_size > 0:
+                result['partial_size_mb'] = partial_size / (1024 * 1024)
+                logger.error(f"Timeout occurred but partial dump exists: {result['partial_size_mb']:.2f} MB")
         if backup_file.exists():
             backup_file.unlink()
     except FileNotFoundError:
         result['error'] = f"Command not found: {pg_dump_cmd}"
+        result['duration'] = (datetime.now() - start_time).total_seconds()
     except Exception as e:
         result['error'] = f"Unexpected error during backup: {str(e)}"
+        result['duration'] = (datetime.now() - start_time).total_seconds()
+        import traceback
+        logger.error(f"Unexpected error: {traceback.format_exc()}")
         if backup_file.exists():
             backup_file.unlink()
     

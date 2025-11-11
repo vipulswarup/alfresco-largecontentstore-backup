@@ -84,13 +84,16 @@ def main():
                 logging.info("-" * 70)
                 logging.info("STEP 1: PostgreSQL backup")
                 logging.info("-" * 70)
+                logging.info(f"Starting PostgreSQL backup at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                logging.info(f"  Database: {config.pgdatabase} on {config.pghost}:{config.pgport}")
+                logging.info(f"  User: {config.pguser}")
                 pg_result = backup_postgres(config)
                 backup_results['postgres'] = pg_result
                 
                 if pg_result['success']:
-                    logging.info(f"PostgreSQL backup completed successfully")
+                    logging.info(f"PostgreSQL backup completed successfully at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                     logging.info(f"  Path: {pg_result['path']}")
-                    logging.info(f"  Duration: {pg_result['duration']:.2f} seconds")
+                    logging.info(f"  Duration: {pg_result['duration']:.2f} seconds ({pg_result['duration']/60:.1f} minutes)")
                     
                     # Display size information
                     uncompressed_mb = pg_result.get('size_uncompressed_mb', 0)
@@ -115,20 +118,34 @@ def main():
                     if 'warning' in pg_result:
                         logging.warning(f"  Warning: {pg_result['warning']}")
                 else:
-                    logging.error(f"PostgreSQL backup FAILED")
+                    logging.error(f"PostgreSQL backup FAILED at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    logging.error(f"  Started at: {pg_result.get('start_time', 'unknown')}")
+                    logging.error(f"  Duration before failure: {pg_result.get('duration', 0):.2f} seconds ({pg_result.get('duration', 0)/60:.1f} minutes)")
                     logging.error(f"  Error: {pg_result['error']}")
+                    if pg_result.get('partial_size_mb'):
+                        logging.error(f"  Partial backup size: {pg_result.get('partial_size_mb'):.2f} MB")
                 
                 # Step 2: Contentstore backup
                 logging.info("-" * 70)
                 logging.info("STEP 2: Contentstore snapshot")
                 logging.info("-" * 70)
+                logging.info(f"Starting contentstore backup at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                logging.info(f"  Source: {config.alf_base_dir / 'alf_data' / 'contentstore'}")
+                logging.info(f"  Destination: {config.backup_dir / 'contentstore'}")
+                timeout_hours = getattr(config, 'contentstore_timeout', 86400) / 3600
+                logging.info(f"  Timeout: {timeout_hours:.1f} hours ({getattr(config, 'contentstore_timeout', 86400)} seconds)")
                 cs_result = backup_contentstore(config)
                 backup_results['contentstore'] = cs_result
                 
                 if cs_result['success']:
-                    logging.info(f"Contentstore backup completed successfully")
+                    logging.info(f"Contentstore backup completed successfully at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                     logging.info(f"  Path: {cs_result['path']}")
-                    logging.info(f"  Duration: {cs_result['duration']:.2f} seconds")
+                    duration_seconds = cs_result['duration']
+                    duration_hours = duration_seconds / 3600
+                    if duration_hours >= 1:
+                        logging.info(f"  Duration: {duration_hours:.2f} hours ({duration_seconds:.0f} seconds)")
+                    else:
+                        logging.info(f"  Duration: {duration_seconds/60:.1f} minutes ({duration_seconds:.0f} seconds)")
                     
                     # Display size information
                     total_mb = cs_result.get('total_size_mb', 0)
@@ -148,13 +165,27 @@ def main():
                     else:
                         logging.info(f"  Additional data backed up: 0 MB (all files hardlinked from previous backup)")
                 else:
-                    logging.error(f"Contentstore backup FAILED")
+                    logging.error(f"Contentstore backup FAILED at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    logging.error(f"  Started at: {cs_result.get('start_time', 'unknown')}")
+                    duration_seconds = cs_result.get('duration', 0)
+                    duration_hours = duration_seconds / 3600
+                    if duration_hours >= 1:
+                        logging.error(f"  Duration before failure: {duration_hours:.2f} hours ({duration_seconds:.0f} seconds)")
+                    else:
+                        logging.error(f"  Duration before failure: {duration_seconds/60:.1f} minutes ({duration_seconds:.0f} seconds)")
                     logging.error(f"  Error: {cs_result['error']}")
+                    if cs_result.get('partial_size_mb'):
+                        logging.error(f"  Partial backup size: {cs_result.get('partial_size_mb'):.2f} MB ({cs_result.get('partial_size_mb')/1024:.2f} GB)")
+                    if cs_result.get('files_transferred'):
+                        logging.error(f"  Files transferred before failure: {cs_result.get('files_transferred')}")
+                    if cs_result.get('timeout_seconds'):
+                        logging.error(f"  Timeout limit: {cs_result.get('timeout_seconds')} seconds ({cs_result.get('timeout_seconds', 0)/3600:.1f} hours)")
                 
                 # Step 3: Apply retention policy
                 logging.info("-" * 70)
                 logging.info(f"STEP 3: Retention policy ({config.retention_days} days)")
                 logging.info("-" * 70)
+                logging.info(f"Starting retention policy application at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 ret_result = apply_retention(config)
                 backup_results['retention'] = ret_result
                 
