@@ -58,18 +58,31 @@ def main():
         print(f"Loading configuration from {env_file}...")
         config = BackupConfig(env_file)
         
-        # Setup logging
-        log_file = setup_logging(config.backup_dir)
+        # Setup logging - use backup_dir if local, or create temp dir for S3
+        if config.backup_dir:
+            log_dir = config.backup_dir
+        else:
+            # For S3 backups, use a temporary directory for logs
+            import tempfile
+            log_dir = Path(tempfile.gettempdir()) / 'alfresco-backup-logs'
+            log_dir.mkdir(parents=True, exist_ok=True)
+        
+        log_file = setup_logging(log_dir)
         logging.info("=" * 70)
         logging.info("Alfresco backup started")
         logging.info("=" * 70)
         
-        # Create backup subdirectories
-        (config.backup_dir / 'contentstore').mkdir(parents=True, exist_ok=True)
-        (config.backup_dir / 'postgres').mkdir(parents=True, exist_ok=True)
+        # Create backup subdirectories (only for local backups)
+        if config.backup_dir:
+            (config.backup_dir / 'contentstore').mkdir(parents=True, exist_ok=True)
+            (config.backup_dir / 'postgres').mkdir(parents=True, exist_ok=True)
         
         # Acquire lock to prevent concurrent runs
-        lockfile = config.backup_dir / 'backup.lock'
+        if config.backup_dir:
+            lockfile = config.backup_dir / 'backup.lock'
+        else:
+            import tempfile
+            lockfile = Path(tempfile.gettempdir()) / 'alfresco-backup.lock'
         
         try:
             with FileLock(str(lockfile)):

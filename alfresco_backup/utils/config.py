@@ -24,8 +24,13 @@ class BackupConfig:
         """Load environment variables and validate required fields."""
         required_vars = [
             'PGHOST', 'PGPORT', 'PGUSER', 'PGPASSWORD',
-            'BACKUP_DIR', 'ALF_BASE_DIR', 'RETENTION_DAYS'
+            'ALF_BASE_DIR', 'RETENTION_DAYS'
         ]
+        
+        # BACKUP_DIR is only required if S3 is not enabled
+        s3_bucket = os.getenv('S3_BUCKET')
+        if not s3_bucket:
+            required_vars.append('BACKUP_DIR')
         optional_email_vars = [
             'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD',
             'ALERT_EMAIL', 'ALERT_FROM'
@@ -53,7 +58,13 @@ class BackupConfig:
         self.pgsuperuser = os.getenv('PGSUPERUSER', 'postgres')
         
         # Path settings
-        self.backup_dir = Path(os.getenv('BACKUP_DIR'))
+        backup_dir_str = os.getenv('BACKUP_DIR')
+        if backup_dir_str:
+            self.backup_dir = Path(backup_dir_str)
+        else:
+            # BACKUP_DIR is optional if S3 is enabled
+            self.backup_dir = None
+        
         self.alf_base_dir = Path(os.getenv('ALF_BASE_DIR'))
         
         # Retention settings
@@ -132,7 +143,7 @@ class BackupConfig:
             self.alert_from = None
         
         # Validate paths
-        if not self.backup_dir.exists():
+        if self.backup_dir and not self.backup_dir.exists():
             print(f"ERROR: Backup directory does not exist: {self.backup_dir}")
             sys.exit(1)
         

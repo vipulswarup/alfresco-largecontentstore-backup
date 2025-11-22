@@ -19,7 +19,13 @@ def backup_postgres(config):
     start_time = datetime.now()
     timestamp_str = start_time.strftime('%Y-%m-%d_%H-%M-%S')
     
-    postgres_dir = config.backup_dir / 'postgres'
+    # For S3 backups, use temp directory; for local backups, use backup_dir
+    if config.backup_dir:
+        postgres_dir = config.backup_dir / 'postgres'
+    else:
+        import tempfile
+        postgres_dir = Path(tempfile.gettempdir()) / 'alfresco-backup-postgres'
+    
     postgres_dir.mkdir(parents=True, exist_ok=True)
     
     backup_file = postgres_dir / f'postgres-{timestamp_str}.sql.gz'

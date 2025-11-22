@@ -164,7 +164,7 @@ def create_env_file():
     print_info("\nThe .env file contains all configuration for the backup system.")
     print_info("You need to provide:")
     print_info("  - PostgreSQL connection details (host, port, user, password)")
-    print_info("  - Backup directory path")
+    print_info("  - Backup destination (local directory or S3 bucket)")
     print_info("  - Alfresco base directory path")
     print_info("  - Retention policy (days)")
     print_info("  - Email alert settings (optional)")
@@ -173,15 +173,54 @@ def create_env_file():
         print_warning("Skipping .env creation. You must create it manually before running backups.")
         return False
     
-    # Collect path configuration first (needed for auto-detection)
-    print_info("\n--- Path Configuration ---")
-    while True:
-        backup_dir = input(f"{Colors.OKCYAN}Backup directory path: {Colors.ENDC}").strip()
-        if backup_dir and Path(backup_dir).exists():
-            break
-        print_error(f"Directory does not exist: {backup_dir}")
-        print_info("Please enter a valid backup directory path.")
+    # Collect backup destination first
+    print_info("\n--- Backup Destination ---")
+    print_info("Choose where to store backups:")
+    print_info("  1. Local directory (traditional backup to disk)")
+    print_info("  2. S3 bucket (cloud backup, requires rclone)")
     
+    backup_destination = input(f"{Colors.OKCYAN}Backup destination (1 or 2) [1]: {Colors.ENDC}").strip() or '1'
+    
+    backup_dir = None
+    s3_bucket = None
+    s3_region = None
+    aws_access_key_id = None
+    aws_secret_access_key = None
+    
+    if backup_destination == '2':
+        # S3 backup
+        print_info("\n--- S3 Backup Configuration ---")
+        print_info("S3 backup will store backups directly to S3 (requires rclone to be installed)")
+        print_info("Note: S3 versioning should be enabled on your bucket for incremental backups")
+        while True:
+            s3_bucket = input(f"{Colors.OKCYAN}S3 bucket name: {Colors.ENDC}").strip()
+            if s3_bucket:
+                break
+            print_error("S3 bucket name is required for S3 backup")
+        
+        s3_region = input(f"{Colors.OKCYAN}S3 region [us-east-1]: {Colors.ENDC}").strip() or 'us-east-1'
+        while True:
+            aws_access_key_id = input(f"{Colors.OKCYAN}AWS Access Key ID: {Colors.ENDC}").strip()
+            if aws_access_key_id:
+                break
+            print_error("AWS Access Key ID is required")
+        while True:
+            aws_secret_access_key = input(f"{Colors.OKCYAN}AWS Secret Access Key: {Colors.ENDC}").strip()
+            if aws_secret_access_key:
+                break
+            print_error("AWS Secret Access Key is required")
+    else:
+        # Local backup
+        print_info("\n--- Local Backup Directory ---")
+        while True:
+            backup_dir = input(f"{Colors.OKCYAN}Backup directory path: {Colors.ENDC}").strip()
+            if backup_dir and Path(backup_dir).exists():
+                break
+            print_error(f"Directory does not exist: {backup_dir}")
+            print_info("Please enter a valid backup directory path.")
+    
+    # Collect Alfresco base directory (needed for auto-detection)
+    print_info("\n--- Alfresco Base Directory ---")
     while True:
         alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory path: {Colors.ENDC}").strip()
         if alf_base_dir and Path(alf_base_dir).exists():
@@ -280,27 +319,6 @@ def create_env_file():
         print_warning("Invalid parallel threads value, using 4")
         parallel_threads = '4'
     
-    print_info("\n--- S3 Backup (optional) ---")
-    configure_s3 = ask_yes_no("Configure S3 backup?", default=False)
-    
-    if configure_s3:
-        print_info("\nS3 backup will store backups directly to S3 (requires rclone to be installed)")
-        print_info("Note: S3 versioning should be enabled on your bucket for incremental backups")
-        s3_bucket = input(f"{Colors.OKCYAN}S3 bucket name: {Colors.ENDC}").strip()
-        if not s3_bucket:
-            print_warning("S3 bucket name is required for S3 backup")
-            configure_s3 = False
-        else:
-            s3_region = input(f"{Colors.OKCYAN}S3 region [us-east-1]: {Colors.ENDC}").strip() or 'us-east-1'
-            aws_access_key_id = input(f"{Colors.OKCYAN}AWS Access Key ID: {Colors.ENDC}").strip()
-            aws_secret_access_key = input(f"{Colors.OKCYAN}AWS Secret Access Key: {Colors.ENDC}").strip()
-            
-            if not aws_access_key_id or not aws_secret_access_key:
-                print_warning("AWS credentials are required for S3 backup")
-                configure_s3 = False
-    else:
-        s3_bucket = s3_region = aws_access_key_id = aws_secret_access_key = ''
-    
     print_info("\n--- Email Alerts (optional) ---")
     configure_email = ask_yes_no("Configure email alerts?", default=False)
     
@@ -340,7 +358,9 @@ PGSUPERUSER={pg_superuser}
 PG_SYSTEM_USER={pg_system_user}
 
 # Paths
-BACKUP_DIR={backup_dir}
+# BACKUP_DIR is only required for local backups (not needed for S3 backups)
+# Leave empty if using S3 backup
+BACKUP_DIR={backup_dir if backup_dir else ''}
 ALF_BASE_DIR={alf_base_dir}
 
 # Retention Policy
