@@ -144,7 +144,10 @@ def main():
                 logging.info("-" * 70)
                 logging.info(f"Starting contentstore backup at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 logging.info(f"  Source: {config.alf_base_dir / 'alf_data' / 'contentstore'}")
-                logging.info(f"  Destination: {config.backup_dir / 'contentstore'}")
+                if config.s3_enabled:
+                    logging.info(f"  Destination: s3://{config.s3_bucket}/alfresco-backups/contentstore/")
+                else:
+                    logging.info(f"  Destination: {config.backup_dir / 'contentstore'}")
                 timeout_hours = getattr(config, 'contentstore_timeout', 86400) / 3600
                 logging.info(f"  Timeout: {timeout_hours:.1f} hours ({getattr(config, 'contentstore_timeout', 86400)} seconds)")
                 cs_result = backup_contentstore(config)
