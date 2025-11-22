@@ -244,6 +244,54 @@ def backup_contentstore(config):
     parallel_threads = getattr(config, 'contentstore_parallel_threads', 4)
     result['timeout_seconds'] = timeout
     
+    # Check if S3 is enabled - if so, sync directly from live contentstore to S3
+    if getattr(config, 's3_enabled', False):
+        logger.info("S3 backup enabled - syncing live contentstore directly to S3")
+        
+        try:
+            from alfresco_backup.utils.s3_utils import sync_to_s3, check_rclone_installed
+            
+            if not check_rclone_installed():
+                result['error'] = "rclone is not installed. Please install rclone to use S3 backups."
+                return result
+            
+            s3_path = "alfresco-backups/contentstore/"
+            logger.info(f"Syncing contentstore to S3: {source} -> s3://{config.s3_bucket}/{s3_path}")
+            
+            s3_result = sync_to_s3(
+                source,
+                config.s3_bucket,
+                s3_path,
+                config.s3_access_key_id,
+                config.s3_secret_access_key,
+                config.s3_region,
+                parallel_transfers=parallel_threads,
+                timeout=timeout
+            )
+            
+            if s3_result['success']:
+                result['success'] = True
+                result['duration'] = s3_result['duration']
+                result['s3_path'] = f"s3://{config.s3_bucket}/{s3_path}"
+                result['files_transferred'] = s3_result.get('files_transferred')
+                result['bytes_transferred'] = s3_result.get('bytes_transferred')
+                result['parallel_threads_used'] = parallel_threads
+                logger.info(f"Contentstore synced to S3 successfully ({s3_result['duration']:.1f}s)")
+            else:
+                result['error'] = f"S3 sync failed: {s3_result['error']}"
+                result['duration'] = s3_result.get('duration', 0)
+                if s3_result.get('bytes_transferred'):
+                    result['bytes_transferred'] = s3_result['bytes_transferred']
+                    result['partial_size_mb'] = s3_result['bytes_transferred'] / (1024 * 1024)
+            
+            return result
+        
+        except Exception as e:
+            logger.error(f"Error during S3 sync: {str(e)}")
+            result['error'] = f"S3 sync error: {str(e)}"
+            return result
+    
+    # Local backup path (original logic)
     # Discover top-level directories for parallel processing
     top_level_dirs = discover_top_level_directories(source)
     

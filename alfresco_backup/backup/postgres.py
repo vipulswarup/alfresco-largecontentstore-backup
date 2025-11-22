@@ -162,6 +162,38 @@ def backup_postgres(config):
         
         # Verify backup file was created and has content
         if backup_file.exists() and backup_file.stat().st_size > 1024:  # At least 1KB
+            # Upload to S3 if configured
+            if getattr(config, 's3_enabled', False):
+                try:
+                    from alfresco_backup.utils.s3_utils import copy_file_to_s3
+                    
+                    s3_path = f"alfresco-backups/postgres/{backup_file.name}"
+                    logger.info(f"Uploading PostgreSQL backup to S3: {s3_path}")
+                    
+                    s3_result = copy_file_to_s3(
+                        backup_file,
+                        config.s3_bucket,
+                        s3_path,
+                        config.s3_access_key_id,
+                        config.s3_secret_access_key,
+                        config.s3_region,
+                        timeout=3600  # 1 hour timeout for upload
+                    )
+                    
+                    if s3_result['success']:
+                        logger.info(f"PostgreSQL backup uploaded to S3 successfully ({s3_result['duration']:.1f}s)")
+                        result['s3_path'] = f"s3://{config.s3_bucket}/{s3_path}"
+                        result['s3_upload_duration'] = s3_result['duration']
+                        # Update path to point to S3 location
+                        result['path'] = result['s3_path']
+                    else:
+                        logger.error(f"Failed to upload PostgreSQL backup to S3: {s3_result['error']}")
+                        result['s3_error'] = s3_result['error']
+                        # Don't fail the backup if S3 upload fails, but log the error
+                except Exception as e:
+                    logger.error(f"Error uploading to S3: {str(e)}")
+                    result['s3_error'] = str(e)
+            
             result['success'] = True
             result['duration'] = (datetime.now() - start_time).total_seconds()
         else:

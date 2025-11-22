@@ -280,6 +280,27 @@ def create_env_file():
         print_warning("Invalid parallel threads value, using 4")
         parallel_threads = '4'
     
+    print_info("\n--- S3 Backup (optional) ---")
+    configure_s3 = ask_yes_no("Configure S3 backup?", default=False)
+    
+    if configure_s3:
+        print_info("\nS3 backup will store backups directly to S3 (requires rclone to be installed)")
+        print_info("Note: S3 versioning should be enabled on your bucket for incremental backups")
+        s3_bucket = input(f"{Colors.OKCYAN}S3 bucket name: {Colors.ENDC}").strip()
+        if not s3_bucket:
+            print_warning("S3 bucket name is required for S3 backup")
+            configure_s3 = False
+        else:
+            s3_region = input(f"{Colors.OKCYAN}S3 region [us-east-1]: {Colors.ENDC}").strip() or 'us-east-1'
+            aws_access_key_id = input(f"{Colors.OKCYAN}AWS Access Key ID: {Colors.ENDC}").strip()
+            aws_secret_access_key = input(f"{Colors.OKCYAN}AWS Secret Access Key: {Colors.ENDC}").strip()
+            
+            if not aws_access_key_id or not aws_secret_access_key:
+                print_warning("AWS credentials are required for S3 backup")
+                configure_s3 = False
+    else:
+        s3_bucket = s3_region = aws_access_key_id = aws_secret_access_key = ''
+    
     print_info("\n--- Email Alerts (optional) ---")
     configure_email = ask_yes_no("Configure email alerts?", default=False)
     
@@ -335,6 +356,15 @@ CONTENTSTORE_TIMEOUT_HOURS={timeout_hours}
 # For large backups (5TB+), use 4-8 threads for 2-4x speedup
 # Each thread processes one top-level directory (typically year directories like 2020/, 2021/)
 CONTENTSTORE_PARALLEL_THREADS={parallel_threads}
+
+# S3 Backup Configuration (optional)
+# If S3_BUCKET is set, backups will be stored directly to S3 instead of local storage
+# Requires rclone to be installed: https://rclone.org/install/
+# Note: Enable S3 versioning on your bucket for incremental backups
+S3_BUCKET={s3_bucket}
+S3_REGION={s3_region}
+AWS_ACCESS_KEY_ID={aws_access_key_id}
+AWS_SECRET_ACCESS_KEY={aws_secret_access_key}
 
 # Email Alerts
 # EMAIL_ALERT_MODE: "both" (send on success and failure), "failure_only" (send only on failure), or "none" (no emails)

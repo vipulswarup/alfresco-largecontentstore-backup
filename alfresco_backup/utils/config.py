@@ -87,6 +87,24 @@ class BackupConfig:
             print("WARNING: Invalid CONTENTSTORE_PARALLEL_THREADS, using 4")
             self.contentstore_parallel_threads = 4
         
+        # S3 backup configuration (optional)
+        self.s3_enabled = bool(os.getenv('S3_BUCKET'))
+        if self.s3_enabled:
+            self.s3_bucket = os.getenv('S3_BUCKET')
+            self.s3_region = os.getenv('S3_REGION', 'us-east-1')
+            self.s3_access_key_id = os.getenv('AWS_ACCESS_KEY_ID', '')
+            self.s3_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY', '')
+            
+            if not self.s3_access_key_id or not self.s3_secret_access_key:
+                print("WARNING: S3_BUCKET specified but AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY missing")
+                print("S3 backups will be disabled")
+                self.s3_enabled = False
+        else:
+            self.s3_bucket = None
+            self.s3_region = None
+            self.s3_access_key_id = None
+            self.s3_secret_access_key = None
+        
         # Email settings
         email_alert_mode = os.getenv('EMAIL_ALERT_MODE', 'failure_only').lower()
         if email_alert_mode not in ['both', 'failure_only', 'none']:
