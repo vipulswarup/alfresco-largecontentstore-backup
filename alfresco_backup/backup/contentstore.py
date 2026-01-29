@@ -249,11 +249,18 @@ def backup_contentstore(config):
         logger.info("S3 backup enabled - syncing live contentstore directly to S3")
         
         try:
-            from alfresco_backup.utils.s3_utils import sync_to_s3, check_rclone_installed
+            from alfresco_backup.utils.s3_utils import sync_to_s3, check_rclone_installed, check_s3_versioning_enabled, enable_s3_versioning
             
             if not check_rclone_installed():
                 result['error'] = "rclone is not installed. Please install rclone to use S3 backups."
                 return result
+            
+            if not check_s3_versioning_enabled(config.s3_bucket, config.s3_access_key_id, config.s3_secret_access_key, config.s3_region):
+                logger.info("S3 versioning not enabled - enabling versioning on bucket")
+                versioning_result = enable_s3_versioning(config.s3_bucket, config.s3_access_key_id, config.s3_secret_access_key, config.s3_region)
+                if not versioning_result['success']:
+                    logger.warning(f"Could not enable S3 versioning: {versioning_result.get('error')}")
+                    logger.warning("Backup will continue but versioning may not be enabled")
             
             s3_path = "alfresco-backups/contentstore/"
             logger.info(f"Syncing contentstore to S3: {source} -> s3://{config.s3_bucket}/{s3_path}")

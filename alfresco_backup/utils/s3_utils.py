@@ -3,8 +3,10 @@
 import os
 import subprocess
 import logging
+import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +249,372 @@ def copy_file_to_s3(
         duration = time.time() - start_time
         result['duration'] = duration
         result['error'] = f"Unexpected error during S3 copy: {str(e)}"
+        logger.error(result['error'])
+    
+    return result
+
+
+def check_s3_versioning_enabled(
+    s3_bucket: str,
+    access_key_id: str,
+    secret_access_key: str,
+    region: str
+) -> bool:
+    """
+    Check if S3 bucket versioning is enabled by attempting to list versions.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+    
+    Returns:
+        True if versioning is enabled (can list versions), False otherwise
+    """
+    if not check_rclone_installed():
+        return False
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        s3_path = f"s3:{s3_bucket}/alfresco-backups/"
+        cmd = [
+            'rclone',
+            'lsjson',
+            '--versions',
+            s3_path
+        ]
+        
+        process = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if process.returncode == 0:
+            import json
+            try:
+                data = json.loads(process.stdout)
+                for item in data:
+                    if 'VersionID' in item:
+                        return True
+            except json.JSONDecodeError:
+                pass
+        
+        return False
+    
+    except Exception as e:
+        logger.warning(f"Could not check S3 versioning status: {e}")
+        return False
+
+
+def enable_s3_versioning(
+    s3_bucket: str,
+    access_key_id: str,
+    secret_access_key: str,
+    region: str
+) -> Dict[str, Any]:
+    """
+    Enable versioning on S3 bucket using AWS CLI if available.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+    
+    Returns:
+        dict with keys: success, error
+    """
+    result = {
+        'success': False,
+        'error': None
+    }
+    
+    try:
+        env = os.environ.copy()
+        env['AWS_ACCESS_KEY_ID'] = access_key_id
+        env['AWS_SECRET_ACCESS_KEY'] = secret_access_key
+        env['AWS_DEFAULT_REGION'] = region
+        
+        cmd = [
+            'aws',
+            's3api',
+            'put-bucket-versioning',
+            '--bucket', s3_bucket,
+            '--versioning-configuration', 'Status=Enabled'
+        ]
+        
+        process = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if process.returncode == 0:
+            result['success'] = True
+            logger.info(f"S3 versioning enabled on bucket: {s3_bucket}")
+        else:
+            error_msg = process.stderr if process.stderr else process.stdout
+            result['error'] = f"AWS CLI not available or failed: {error_msg[:500]}"
+            logger.warning(result['error'])
+            logger.warning("Please enable S3 versioning manually via AWS Console or CLI")
+            result['error'] = "AWS CLI not available. Please enable S3 versioning manually."
+    
+    except FileNotFoundError:
+        result['error'] = "AWS CLI not installed. Please install AWS CLI or enable S3 versioning manually via AWS Console."
+        logger.warning(result['error'])
+    except Exception as e:
+        result['error'] = f"Error enabling S3 versioning: {str(e)}"
+        logger.error(result['error'])
+    
+    return result
+
+
+def list_s3_postgres_backups(
+    s3_bucket: str,
+    access_key_id: str,
+    secret_access_key: str,
+    region: str
+) -> List[str]:
+    """
+    List PostgreSQL backups in S3 with timestamps.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+    
+    Returns:
+        List of timestamp strings (YYYY-MM-DD_HH-MM-SS format)
+    """
+    if not check_rclone_installed():
+        return []
+    
+    backups = []
+    s3_path = f"s3:{s3_bucket}/alfresco-backups/postgres/"
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        cmd = [
+            'rclone',
+            'lsf',
+            '--format', 'p',
+            s3_path
+        ]
+        
+        process = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if process.returncode == 0:
+            for line in process.stdout.split('\n'):
+                line = line.strip()
+                if line and line.startswith('postgres-') and line.endswith('.sql.gz'):
+                    timestamp = line.replace('postgres-', '').replace('.sql.gz', '')
+                    try:
+                        datetime.strptime(timestamp, '%Y-%m-%d_%H-%M-%S')
+                        backups.append(timestamp)
+                    except ValueError:
+                        continue
+        
+        return sorted(backups, reverse=True)
+    
+    except Exception as e:
+        logger.error(f"Error listing S3 PostgreSQL backups: {e}")
+        return []
+
+
+def list_s3_contentstore_versions(
+    s3_bucket: str,
+    access_key_id: str,
+    secret_access_key: str,
+    region: str
+) -> List[Dict[str, Any]]:
+    """
+    List contentstore versions in S3 with timestamps.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+    
+    Returns:
+        List of dicts with keys: version_id, timestamp, is_latest
+    """
+    if not check_rclone_installed():
+        return []
+    
+    versions = []
+    s3_path = f"s3:{s3_bucket}/alfresco-backups/contentstore/"
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        cmd = [
+            'rclone',
+            'lsjson',
+            '--versions',
+            s3_path
+        ]
+        
+        process = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if process.returncode == 0:
+            import json
+            try:
+                data = json.loads(process.stdout)
+                for item in data:
+                    if 'ModTime' in item and 'VersionID' in item:
+                        versions.append({
+                            'version_id': item['VersionID'],
+                            'timestamp': datetime.fromisoformat(item['ModTime'].replace('Z', '+00:00')),
+                            'is_latest': item.get('IsLatest', False)
+                        })
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                logger.warning(f"Could not parse S3 version list: {e}")
+        
+        return sorted(versions, key=lambda x: x['timestamp'], reverse=True)
+    
+    except Exception as e:
+        logger.error(f"Error listing S3 contentstore versions: {e}")
+        return []
+
+
+def get_s3_version_by_date(
+    s3_bucket: str,
+    access_key_id: str,
+    secret_access_key: str,
+    region: str,
+    target_date: datetime
+) -> Optional[str]:
+    """
+    Get version ID for contentstore at or before target date.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+        target_date: Target datetime for restore
+    
+    Returns:
+        Version ID string or None if no version found
+    """
+    versions = list_s3_contentstore_versions(s3_bucket, access_key_id, secret_access_key, region)
+    
+    for version in versions:
+        if version['timestamp'] <= target_date:
+            return version['version_id']
+    
+    return None
+
+
+def download_from_s3(
+    s3_bucket: str,
+    s3_path: str,
+    local_path: Path,
+    access_key_id: str,
+    secret_access_key: str,
+    region: str,
+    version_id: Optional[str] = None,
+    timeout: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Download file or directory from S3 to local path.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        s3_path: Path within bucket
+        local_path: Local destination path
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+        version_id: Optional version ID for versioned objects
+        timeout: Timeout in seconds (optional)
+    
+    Returns:
+        dict with keys: success, error, duration
+    """
+    import time
+    
+    start_time = time.time()
+    result = {
+        'success': False,
+        'error': None,
+        'duration': 0
+    }
+    
+    if not check_rclone_installed():
+        result['error'] = "rclone is not installed. Please install rclone to use S3 restore."
+        return result
+    
+    s3_source = f"s3:{s3_bucket}/{s3_path.lstrip('/')}"
+    if version_id:
+        s3_source = f"{s3_source}?versionId={version_id}"
+    
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    cmd = [
+        'rclone',
+        'copy',
+        s3_source,
+        str(local_path),
+        '--s3-provider', 'AWS',
+        '--s3-region', region,
+        '-v'
+    ]
+    
+    if timeout:
+        cmd.extend(['--timeout', f'{timeout}s'])
+    
+    logger.info(f"Downloading from S3: {s3_source} -> {local_path}")
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        process = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        
+        duration = time.time() - start_time
+        result['duration'] = duration
+        
+        if process.returncode == 0:
+            result['success'] = True
+        else:
+            error_msg = process.stderr if process.stderr else process.stdout
+            result['error'] = f"rclone download failed with exit code {process.returncode}: {error_msg[:500]}"
+            logger.error(result['error'])
+    
+    except subprocess.TimeoutExpired:
+        duration = time.time() - start_time
+        result['duration'] = duration
+        result['error'] = f"rclone download timed out after {timeout} seconds"
+        logger.error(result['error'])
+    
+    except Exception as e:
+        duration = time.time() - start_time
+        result['duration'] = duration
+        result['error'] = f"Unexpected error during S3 download: {str(e)}"
         logger.error(result['error'])
     
     return result

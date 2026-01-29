@@ -53,13 +53,22 @@ class RestoreConfig:
         self.contentstore_dir = None
         self.alfresco_script = None
         self.restore_log_dir = None
+        self.s3_enabled = False
+        self.s3_bucket = None
+        self.s3_region = None
+        self.s3_access_key_id = None
+        self.s3_secret_access_key = None
         
     def validate(self) -> Tuple[bool, List[str]]:
         """Validate configuration and return (success, errors)."""
         errors = []
         
-        if not self.backup_dir or not Path(self.backup_dir).exists():
-            errors.append(f"Backup directory does not exist: {self.backup_dir}")
+        if not self.s3_enabled:
+            if not self.backup_dir or not Path(self.backup_dir).exists():
+                errors.append(f"Backup directory does not exist: {self.backup_dir}")
+        else:
+            if not self.s3_bucket or not self.s3_access_key_id or not self.s3_secret_access_key:
+                errors.append("S3 configuration incomplete: S3_BUCKET, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY required")
         
         if not self.alf_base_dir or not Path(self.alf_base_dir).exists():
             errors.append(f"Alfresco base directory does not exist: {self.alf_base_dir}")
@@ -344,6 +353,19 @@ class AlfrescoRestore:
     
     def list_postgres_backups(self) -> List[str]:
         """List available PostgreSQL backups."""
+        if self.config.s3_enabled:
+            try:
+                from alfresco_backup.utils.s3_utils import list_s3_postgres_backups
+                return list_s3_postgres_backups(
+                    self.config.s3_bucket,
+                    self.config.s3_access_key_id,
+                    self.config.s3_secret_access_key,
+                    self.config.s3_region
+                )
+            except Exception as e:
+                self.logger.error(f"Error listing S3 PostgreSQL backups: {e}")
+                return []
+        
         backup_dir = Path(self.config.backup_dir) / 'postgres'
         if not backup_dir.exists():
             return []
@@ -358,6 +380,20 @@ class AlfrescoRestore:
     
     def list_contentstore_backups(self) -> List[str]:
         """List available contentstore backups."""
+        if self.config.s3_enabled:
+            try:
+                from alfresco_backup.utils.s3_utils import list_s3_contentstore_versions
+                versions = list_s3_contentstore_versions(
+                    self.config.s3_bucket,
+                    self.config.s3_access_key_id,
+                    self.config.s3_secret_access_key,
+                    self.config.s3_region
+                )
+                return [v['timestamp'].strftime('%Y-%m-%d_%H-%M-%S') for v in versions]
+            except Exception as e:
+                self.logger.error(f"Error listing S3 contentstore versions: {e}")
+                return []
+        
         backup_dir = Path(self.config.backup_dir) / 'contentstore'
         if not backup_dir.exists():
             return []
@@ -372,6 +408,24 @@ class AlfrescoRestore:
     
     def validate_postgres_backup(self, timestamp: str) -> bool:
         """Validate PostgreSQL backup exists and has content."""
+        if self.config.s3_enabled:
+            try:
+                from alfresco_backup.utils.s3_utils import check_rclone_installed
+                if not check_rclone_installed():
+                    self.logger.error("rclone is not installed. Please install rclone to use S3 restore.")
+                    return False
+                
+                backups = self.list_postgres_backups()
+                if timestamp in backups:
+                    self.logger.info(f"PostgreSQL backup found in S3: {timestamp}")
+                    return True
+                else:
+                    self.logger.error(f"PostgreSQL backup not found in S3: {timestamp}")
+                    return False
+            except Exception as e:
+                self.logger.error(f"Error validating S3 PostgreSQL backup: {e}")
+                return False
+        
         backup_file = Path(self.config.backup_dir) / 'postgres' / f'postgres-{timestamp}.sql.gz'
         
         if not backup_file.exists():
@@ -390,6 +444,32 @@ class AlfrescoRestore:
     
     def validate_contentstore_backup(self, timestamp: str) -> bool:
         """Validate contentstore backup exists and has content."""
+        if self.config.s3_enabled:
+            try:
+                from alfresco_backup.utils.s3_utils import check_rclone_installed, list_s3_contentstore_versions
+                if not check_rclone_installed():
+                    self.logger.error("rclone is not installed. Please install rclone to use S3 restore.")
+                    return False
+                
+                versions = list_s3_contentstore_versions(
+                    self.config.s3_bucket,
+                    self.config.s3_access_key_id,
+                    self.config.s3_secret_access_key,
+                    self.config.s3_region
+                )
+                
+                target_timestamp = datetime.strptime(timestamp, '%Y-%m-%d_%H-%M-%S')
+                for version in versions:
+                    if version['timestamp'].strftime('%Y-%m-%d_%H-%M-%S') == timestamp:
+                        self.logger.info(f"Contentstore backup version found in S3: {timestamp}")
+                        return True
+                
+                self.logger.error(f"Contentstore backup version not found in S3: {timestamp}")
+                return False
+            except Exception as e:
+                self.logger.error(f"Error validating S3 contentstore backup: {e}")
+                return False
+        
         backup_dir = Path(self.config.backup_dir) / 'contentstore' / f'contentstore-{timestamp}'
         
         if not backup_dir.exists():
@@ -420,11 +500,40 @@ class AlfrescoRestore:
         """Restore PostgreSQL from backup."""
         self.logger.info(f"Restoring PostgreSQL from backup: {timestamp}")
         
-        backup_file = Path(self.config.backup_dir) / 'postgres' / f'postgres-{timestamp}.sql.gz'
-        
-        if not backup_file.exists():
-            self.logger.error(f"PostgreSQL backup file not found: {backup_file}")
-            return False
+        if self.config.s3_enabled:
+            import tempfile
+            temp_dir = Path(tempfile.gettempdir()) / 'alfresco-restore'
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            backup_file = temp_dir / f'postgres-{timestamp}.sql.gz'
+            
+            self.logger.info(f"Downloading PostgreSQL backup from S3...")
+            try:
+                from alfresco_backup.utils.s3_utils import download_from_s3
+                s3_path = f"alfresco-backups/postgres/postgres-{timestamp}.sql.gz"
+                download_result = download_from_s3(
+                    self.config.s3_bucket,
+                    s3_path,
+                    backup_file,
+                    self.config.s3_access_key_id,
+                    self.config.s3_secret_access_key,
+                    self.config.s3_region,
+                    timeout=3600
+                )
+                
+                if not download_result['success']:
+                    self.logger.error(f"Failed to download PostgreSQL backup from S3: {download_result['error']}")
+                    return False
+                
+                self.logger.info(f"PostgreSQL backup downloaded successfully ({download_result['duration']:.1f}s)")
+            except Exception as e:
+                self.logger.error(f"Error downloading PostgreSQL backup from S3: {e}")
+                return False
+        else:
+            backup_file = Path(self.config.backup_dir) / 'postgres' / f'postgres-{timestamp}.sql.gz'
+            
+            if not backup_file.exists():
+                self.logger.error(f"PostgreSQL backup file not found: {backup_file}")
+                return False
         
         # Load database connection details from .env file
         try:
@@ -529,23 +638,86 @@ class AlfrescoRestore:
                 # Don't fail the restore if psql succeeded, but log the warning
             
             self.logger.info("PostgreSQL restore completed successfully")
+            
+            if self.config.s3_enabled and backup_file.parent.name == 'alfresco-restore':
+                try:
+                    backup_file.unlink()
+                    self.logger.info("Cleaned up temporary downloaded backup file")
+                except Exception as e:
+                    self.logger.warning(f"Could not clean up temporary file: {e}")
+            
             return True
             
         except Exception as e:
             self.logger.error(f"PostgreSQL restore failed: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
+            
+            if self.config.s3_enabled and backup_file.parent.name == 'alfresco-restore':
+                try:
+                    backup_file.unlink()
+                    self.logger.info("Cleaned up temporary downloaded backup file after failure")
+                except Exception:
+                    pass
+            
             return False
     
     def restore_contentstore(self, timestamp: str) -> bool:
         """Restore contentstore from backup."""
         self.logger.info(f"Restoring contentstore from backup: {timestamp}")
         
-        source_dir = Path(self.config.backup_dir) / 'contentstore' / f'contentstore-{timestamp}'
-        
         if not self.config.contentstore_dir:
             self.logger.error("Contentstore directory not configured")
             return False
+        
+        if self.config.s3_enabled:
+            import tempfile
+            from alfresco_backup.utils.s3_utils import download_from_s3, get_s3_version_by_date
+            temp_dir = Path(tempfile.gettempdir()) / 'alfresco-restore' / f'contentstore-{timestamp}'
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            source_dir = temp_dir
+            
+            self.logger.info(f"Downloading contentstore backup from S3...")
+            try:
+                target_date = datetime.strptime(timestamp, '%Y-%m-%d_%H-%M-%S')
+                version_id = get_s3_version_by_date(
+                    self.config.s3_bucket,
+                    self.config.s3_access_key_id,
+                    self.config.s3_secret_access_key,
+                    self.config.s3_region,
+                    target_date
+                )
+                
+                if not version_id:
+                    self.logger.error(f"No contentstore version found for date: {timestamp}")
+                    return False
+                
+                s3_path = "alfresco-backups/contentstore/"
+                download_result = download_from_s3(
+                    self.config.s3_bucket,
+                    s3_path,
+                    source_dir,
+                    self.config.s3_access_key_id,
+                    self.config.s3_secret_access_key,
+                    self.config.s3_region,
+                    version_id=version_id,
+                    timeout=86400
+                )
+                
+                if not download_result['success']:
+                    self.logger.error(f"Failed to download contentstore backup from S3: {download_result['error']}")
+                    return False
+                
+                self.logger.info(f"Contentstore backup downloaded successfully ({download_result['duration']:.1f}s)")
+            except Exception as e:
+                self.logger.error(f"Error downloading contentstore backup from S3: {e}")
+                return False
+        else:
+            source_dir = Path(self.config.backup_dir) / 'contentstore' / f'contentstore-{timestamp}'
+            
+            if not source_dir.exists():
+                self.logger.error(f"Contentstore backup directory not found: {source_dir}")
+                return False
         
         try:
             self.config.contentstore_dir.mkdir(parents=True, exist_ok=True)
@@ -577,10 +749,28 @@ class AlfrescoRestore:
             subprocess.run(['sudo', 'chown', '-R', f'{self.config.alfresco_user}:{self.config.alfresco_user}', str(self.config.contentstore_dir)], check=True)
             
             self.logger.info("Contentstore restore completed successfully")
+            
+            if self.config.s3_enabled and source_dir.parent.name == 'alfresco-restore':
+                try:
+                    import shutil
+                    shutil.rmtree(source_dir.parent)
+                    self.logger.info("Cleaned up temporary downloaded backup directory")
+                except Exception as e:
+                    self.logger.warning(f"Could not clean up temporary directory: {e}")
+            
             return True
             
         except Exception as e:
             self.logger.error(f"Contentstore restore failed: {e}")
+            
+            if self.config.s3_enabled and 'source_dir' in locals() and source_dir.parent.name == 'alfresco-restore':
+                try:
+                    import shutil
+                    shutil.rmtree(source_dir.parent)
+                    self.logger.info("Cleaned up temporary downloaded backup directory after failure")
+                except Exception:
+                    pass
+            
             return False
     
     def configure_pitr(self, target_time: Optional[str] = None) -> bool:
@@ -731,18 +921,33 @@ def get_config() -> RestoreConfig:
         backup_dir = os.getenv('BACKUP_DIR')
         alf_base_dir = os.getenv('ALF_BASE_DIR')
         alfresco_user = os.getenv('ALFRESCO_USER')
+        s3_bucket = os.getenv('S3_BUCKET')
+        
+        if s3_bucket:
+            config.s3_enabled = True
+            config.s3_bucket = s3_bucket
+            config.s3_region = os.getenv('S3_REGION', 'us-east-1')
+            config.s3_access_key_id = os.getenv('AWS_ACCESS_KEY_ID', '')
+            config.s3_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY', '')
         
         if backup_dir and alf_base_dir:
-            # Validate paths exist
-            if Path(backup_dir).exists() and Path(alf_base_dir).exists():
-                config.backup_dir = backup_dir
+            if not config.s3_enabled:
+                if Path(backup_dir).exists() and Path(alf_base_dir).exists():
+                    config.backup_dir = backup_dir
+                    config.alf_base_dir = Path(alf_base_dir)
+                    config.alfresco_user = alfresco_user or config.alfresco_user
+                    config.restore_log_dir = str(Path.cwd())
+                    print("\nConfiguration loaded from .env file (local mode)")
+                    return config
+            elif Path(alf_base_dir).exists():
                 config.alf_base_dir = Path(alf_base_dir)
                 config.alfresco_user = alfresco_user or config.alfresco_user
                 config.restore_log_dir = str(Path.cwd())
-                print("\nConfiguration loaded from .env file")
+                print("\nConfiguration loaded from .env file (S3 mode)")
                 return config
-            else:
-                print("\nWarning: .env file found but paths are invalid, prompting for configuration...")
+        
+        if config.s3_enabled or (backup_dir and alf_base_dir):
+            print("\nWarning: .env file found but some configuration is invalid, prompting for missing values...")
     except ImportError:
         pass  # dotenv not available, continue with interactive
     except Exception as e:

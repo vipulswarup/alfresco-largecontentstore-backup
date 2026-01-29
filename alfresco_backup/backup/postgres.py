@@ -171,7 +171,14 @@ def backup_postgres(config):
             # Upload to S3 if configured
             if getattr(config, 's3_enabled', False):
                 try:
-                    from alfresco_backup.utils.s3_utils import copy_file_to_s3
+                    from alfresco_backup.utils.s3_utils import copy_file_to_s3, check_s3_versioning_enabled, enable_s3_versioning
+                    
+                    if not check_s3_versioning_enabled(config.s3_bucket, config.s3_access_key_id, config.s3_secret_access_key, config.s3_region):
+                        logger.info("S3 versioning not enabled - enabling versioning on bucket")
+                        versioning_result = enable_s3_versioning(config.s3_bucket, config.s3_access_key_id, config.s3_secret_access_key, config.s3_region)
+                        if not versioning_result['success']:
+                            logger.warning(f"Could not enable S3 versioning: {versioning_result.get('error')}")
+                            logger.warning("Backup will continue but versioning may not be enabled")
                     
                     s3_path = f"alfresco-backups/postgres/{backup_file.name}"
                     logger.info(f"Uploading PostgreSQL backup to S3: {s3_path}")
