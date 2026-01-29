@@ -1389,7 +1389,7 @@ def create_restore_env_file():
     
     print_info("\nThe restore script needs the following information:")
     print_info("  - PostgreSQL connection details (host, port, user, password, database)")
-    print_info("  - Backup directory location (where backups are stored)")
+    print_info("  - Backup location (local directory or S3 bucket)")
     print_info("  - Alfresco base directory (target for restore)")
     print_info("  - Alfresco OS user (for file ownership)")
     
@@ -1397,14 +1397,48 @@ def create_restore_env_file():
         print_warning("Skipping .env creation. Restore will fail without configuration.")
         return False
     
-    # Collect path configuration first (needed for auto-detection)
-    print_info("\n--- Path Configuration ---")
-    while True:
-        backup_dir = input(f"{Colors.OKCYAN}Backup directory path: {Colors.ENDC}").strip()
-        if backup_dir and Path(backup_dir).exists():
-            break
-        print_error(f"Directory does not exist: {backup_dir}")
-        print_info("Please enter a valid backup directory path.")
+    # Collect backup location configuration
+    print_info("\n--- Backup Location ---")
+    print_info("Choose where backups are stored:")
+    print_info("  1. Local directory (traditional backup on disk)")
+    print_info("  2. S3 bucket (cloud backup, requires rclone)")
+    
+    backup_location = input(f"{Colors.OKCYAN}Backup location (1 or 2) [1]: {Colors.ENDC}").strip() or '1'
+    
+    backup_dir = None
+    s3_bucket = None
+    s3_region = None
+    aws_access_key_id = None
+    aws_secret_access_key = None
+    
+    if backup_location == '2':
+        print_info("\n--- S3 Backup Configuration ---")
+        print_info("S3 restore will download backups from S3 (requires rclone to be installed)")
+        while True:
+            s3_bucket = input(f"{Colors.OKCYAN}S3 bucket name: {Colors.ENDC}").strip()
+            if s3_bucket:
+                break
+            print_error("S3 bucket name is required for S3 restore")
+        
+        s3_region = input(f"{Colors.OKCYAN}S3 region [us-east-1]: {Colors.ENDC}").strip() or 'us-east-1'
+        while True:
+            aws_access_key_id = input(f"{Colors.OKCYAN}AWS Access Key ID: {Colors.ENDC}").strip()
+            if aws_access_key_id:
+                break
+            print_error("AWS Access Key ID is required")
+        while True:
+            aws_secret_access_key = input(f"{Colors.OKCYAN}AWS Secret Access Key: {Colors.ENDC}").strip()
+            if aws_secret_access_key:
+                break
+            print_error("AWS Secret Access Key is required")
+    else:
+        print_info("\n--- Local Backup Directory ---")
+        while True:
+            backup_dir = input(f"{Colors.OKCYAN}Backup directory path: {Colors.ENDC}").strip()
+            if backup_dir and Path(backup_dir).exists():
+                break
+            print_error(f"Directory does not exist: {backup_dir}")
+            print_info("Please enter a valid backup directory path.")
     
     while True:
         alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory path: {Colors.ENDC}").strip()
@@ -1474,8 +1508,18 @@ PGPASSWORD={pg_password}
 PGDATABASE={pg_database}
 
 # Path Configuration
-BACKUP_DIR={backup_dir}
+# BACKUP_DIR is only required for local backups (not needed for S3 backups)
+# Leave empty if using S3 restore
+BACKUP_DIR={backup_dir if backup_dir else ''}
 ALF_BASE_DIR={alf_base_dir}
+
+# S3 Backup Configuration (optional)
+# If S3_BUCKET is set, restore will download backups from S3
+# Requires rclone to be installed: https://rclone.org/install/
+S3_BUCKET={s3_bucket if s3_bucket else ''}
+S3_REGION={s3_region if s3_region else ''}
+AWS_ACCESS_KEY_ID={aws_access_key_id if aws_access_key_id else ''}
+AWS_SECRET_ACCESS_KEY={aws_secret_access_key if aws_secret_access_key else ''}
 
 # Customer Name (optional, displayed prominently in email alerts)
 CUSTOMER_NAME={customer_name}
