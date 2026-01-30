@@ -26,11 +26,19 @@ def check_rclone_installed() -> bool:
 
 
 def get_rclone_env(access_key_id: str, secret_access_key: str, region: str) -> Dict[str, str]:
-    """Get environment variables for rclone S3 operations."""
+    """Get environment variables for rclone S3 operations.
+    
+    Uses RCLONE_CONFIG_S3_* environment variables to create a temporary 's3' remote
+    without needing a config file.
+    """
     env = os.environ.copy()
-    env['AWS_ACCESS_KEY_ID'] = access_key_id
-    env['AWS_SECRET_ACCESS_KEY'] = secret_access_key
-    env['AWS_DEFAULT_REGION'] = region
+    # Set rclone config via environment variables (creates temporary 's3' remote)
+    env['RCLONE_CONFIG_S3_TYPE'] = 's3'
+    env['RCLONE_CONFIG_S3_PROVIDER'] = 'AWS'
+    env['RCLONE_CONFIG_S3_ACCESS_KEY_ID'] = access_key_id
+    env['RCLONE_CONFIG_S3_SECRET_ACCESS_KEY'] = secret_access_key
+    env['RCLONE_CONFIG_S3_REGION'] = region
+    env['RCLONE_CONFIG_S3_ENV_AUTH'] = 'false'  # Use explicit credentials, not env vars
     return env
 
 
@@ -77,11 +85,10 @@ def sync_to_s3(
         result['error'] = "rclone is not installed. Please install rclone to use S3 backups."
         return result
     
-    # Build S3 destination path using connection string format
-    # Format: s3,provider=AWS,region=REGION,env_auth=true:bucket/path
-    s3_dest = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/{s3_path.rstrip('/')}/"
+    # Build S3 destination path - 's3' remote is created via RCLONE_CONFIG_S3_* env vars
+    s3_dest = f"s3:{s3_bucket}/{s3_path.rstrip('/')}/"
     
-    # Build rclone command - use connection string format
+    # Build rclone command
     cmd = [
         'rclone',
         'sync',
@@ -198,11 +205,10 @@ def copy_file_to_s3(
         result['error'] = "rclone is not installed. Please install rclone to use S3 backups."
         return result
     
-    # Build S3 destination path using connection string format
-    # Format: s3,provider=AWS,region=REGION,env_auth=true:bucket/path
-    s3_dest = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/{s3_path.lstrip('/')}"
+    # Build S3 destination path - 's3' remote is created via RCLONE_CONFIG_S3_* env vars
+    s3_dest = f"s3:{s3_bucket}/{s3_path.lstrip('/')}"
     
-    # Build rclone command - use connection string format
+    # Build rclone command
     cmd = [
         'rclone',
         'copy',
@@ -275,8 +281,8 @@ def check_s3_versioning_enabled(
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
-        # Build S3 path using connection string format
-        s3_path = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/alfresco-backups/"
+        # Build S3 path - 's3' remote is created via RCLONE_CONFIG_S3_* env vars
+        s3_path = f"s3:{s3_bucket}/alfresco-backups/"
         cmd = [
             'rclone',
             'lsjson',
@@ -396,8 +402,8 @@ def list_s3_postgres_backups(
         return []
     
     backups = []
-    # Build S3 path using connection string format
-    s3_path = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/alfresco-backups/postgres/"
+    # Build S3 path - 's3' remote is created via RCLONE_CONFIG_S3_* env vars
+    s3_path = f"s3:{s3_bucket}/alfresco-backups/postgres/"
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
@@ -456,8 +462,8 @@ def list_s3_contentstore_versions(
         return []
     
     versions = []
-    # Build S3 path using connection string format
-    s3_path = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/alfresco-backups/contentstore/"
+    # Build S3 path - 's3' remote is created via RCLONE_CONFIG_S3_* env vars
+    s3_path = f"s3:{s3_bucket}/alfresco-backups/contentstore/"
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
@@ -565,11 +571,13 @@ def download_from_s3(
         result['error'] = "rclone is not installed. Please install rclone to use S3 restore."
         return result
     
-    # Build S3 source path using connection string format
-    s3_source = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/{s3_path.lstrip('/')}"
+    # Build S3 source path - 's3' remote is created via RCLONE_CONFIG_S3_* env vars
+    s3_source = f"s3:{s3_bucket}/{s3_path.lstrip('/')}"
     if version_id:
-        # For versioned objects, append version ID to the path
-        s3_source = f"{s3_source}?versionId={version_id}"
+        # For versioned objects, use --s3-version-at flag
+        # Note: rclone doesn't support direct version ID in path, need to use flag or list versions
+        logger.warning(f"Version ID {version_id} specified but rclone copy doesn't support direct version ID access")
+        logger.warning("Will attempt to download latest version - version-specific restore may need manual intervention")
     
     local_path.parent.mkdir(parents=True, exist_ok=True)
     
@@ -580,6 +588,10 @@ def download_from_s3(
         str(local_path),
         '-v'
     ]
+    
+    # If version ID is specified, we'd need to use --s3-version-at, but that requires a timestamp
+    # For now, we'll download the latest version
+    # TODO: Implement proper version ID handling if needed
     
     if timeout:
         cmd.extend(['--timeout', f'{timeout}s'])
