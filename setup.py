@@ -434,6 +434,13 @@ def create_directories():
     print_header("Step 3: Create Backup Directories")
     
     config = load_env_config()
+    s3_enabled = bool(config.get('S3_BUCKET'))
+    
+    if s3_enabled:
+        print_info("S3 mode enabled - skipping local backup directory creation")
+        print_info("  Backups will be stored directly to S3")
+        return True
+    
     backup_dir = config.get('BACKUP_DIR')
     
     if not backup_dir:
@@ -623,6 +630,13 @@ def configure_wal_archive():
     print_header("Step 4: Configure WAL Archive Directory for PostgreSQL")
     
     config = load_env_config()
+    s3_enabled = bool(config.get('S3_BUCKET'))
+    
+    if s3_enabled:
+        print_info("S3 mode enabled - skipping WAL archive configuration")
+        print_info("  WAL archiving is not needed for S3 backups")
+        return True
+    
     backup_dir = config.get('BACKUP_DIR')
     
     if not backup_dir:
@@ -902,9 +916,16 @@ def configure_postgresql():
     print_header("Step 5: Configure PostgreSQL for WAL Archiving")
     
     config = load_env_config()
-    backup_dir = config.get('BACKUP_DIR')
+    s3_enabled = bool(config.get('S3_BUCKET'))
     alf_base_dir = config.get('ALF_BASE_DIR')
     pg_user = config.get('PGUSER', 'alfresco')
+    
+    if s3_enabled:
+        print_info("S3 mode enabled - skipping PostgreSQL WAL archiving configuration")
+        print_info("  WAL archiving is not needed for S3 backups")
+        return True
+    
+    backup_dir = config.get('BACKUP_DIR')
     
     if not backup_dir or not alf_base_dir:
         print_error("BACKUP_DIR or ALF_BASE_DIR not found in .env file")
@@ -1252,13 +1273,18 @@ def verify_installation():
         config = load_env_config()
         
         # Verify required settings
-        required_settings = ['BACKUP_DIR', 'ALF_BASE_DIR', 'PGUSER', 'PGHOST', 'PGPORT']
+        s3_enabled = bool(config.get('S3_BUCKET'))
+        required_settings = ['ALF_BASE_DIR', 'PGUSER', 'PGHOST', 'PGPORT']
+        if not s3_enabled:
+            required_settings.append('BACKUP_DIR')
         missing = [s for s in required_settings if not config.get(s)]
         if missing:
             print_error(f"Missing required settings in .env: {', '.join(missing)}")
             checks.append(False)
         else:
             print_success("All required settings present in .env")
+            if s3_enabled:
+                print_info("  S3 mode detected (BACKUP_DIR not required)")
             checks.append(True)
     else:
         print_error(".env file missing")
@@ -1267,22 +1293,28 @@ def verify_installation():
     
     # Check backup directories
     print_info("\n[2/6] Checking backup directories...")
-    backup_dir = config.get('BACKUP_DIR')
-    if backup_dir and Path(backup_dir).exists():
-        print_success(f"Backup directory exists: {backup_dir}")
-        
-        # Check subdirectories
-        for subdir in ['postgres', 'contentstore']:
-            path = Path(backup_dir) / subdir
-            if path.exists():
-                print_success(f"  {subdir}/ exists")
-            else:
-                print_error(f"  {subdir}/ missing")
-                checks.append(False)
+    s3_enabled = bool(config.get('S3_BUCKET'))
+    if s3_enabled:
+        print_info("S3 mode enabled - skipping local backup directory check")
+        print_info("  Backups will be stored directly to S3")
         checks.append(True)
     else:
-        print_error(f"Backup directory missing: {backup_dir}")
-        checks.append(False)
+        backup_dir = config.get('BACKUP_DIR')
+        if backup_dir and Path(backup_dir).exists():
+            print_success(f"Backup directory exists: {backup_dir}")
+            
+            # Check subdirectories
+            for subdir in ['postgres', 'contentstore']:
+                path = Path(backup_dir) / subdir
+                if path.exists():
+                    print_success(f"  {subdir}/ exists")
+                else:
+                    print_error(f"  {subdir}/ missing")
+                    checks.append(False)
+            checks.append(True)
+        else:
+            print_error(f"Backup directory missing: {backup_dir}")
+            checks.append(False)
     
     # Check virtual environment
     print_info("\n[3/6] Checking Python virtual environment...")
