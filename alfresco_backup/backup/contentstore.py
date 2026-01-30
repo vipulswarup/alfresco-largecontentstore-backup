@@ -179,65 +179,23 @@ def backup_contentstore(config):
     
     Returns dict with keys: success, path, error, duration, start_time, total_size_mb, additional_size_mb
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     start_time = datetime.now()
     timestamp_str = start_time.strftime('%Y-%m-%d_%H-%M-%S')
     
-    contentstore_dir = config.backup_dir / 'contentstore'
-    contentstore_dir.mkdir(parents=True, exist_ok=True)
-    
     source = config.alf_base_dir / 'alf_data' / 'contentstore'
-    destination = contentstore_dir / f'contentstore-{timestamp_str}'
-    last_link = contentstore_dir / 'last'
-    
-    # Clean up any recent failed backup attempts first
-    cleanup_failed_backups(contentstore_dir, last_link)
     
     result = {
         'success': False,
-        'path': str(destination),
+        'path': None,
         'error': None,
         'duration': 0,
         'start_time': start_time.isoformat(),
         'total_size_mb': 0,
         'additional_size_mb': 0
     }
-    
-    # Validate paths
-    try:
-        source = validate_path(source, must_exist=True)
-        destination = validate_path(destination, must_exist=False)
-    except ValueError as e:
-        result['error'] = f"Invalid path: {e}"
-        return result
-    
-    # Check available disk space before starting
-    import shutil
-    disk_stat = shutil.disk_usage(contentstore_dir)
-    available_gb = disk_stat.free / (1024**3)
-    source_size = get_directory_size(source)
-    source_gb = source_size / (1024**3)
-    
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"Disk space check: {available_gb:.1f} GB available, source is {source_gb:.1f} GB")
-    
-    # Warn if less than 20% of source size is available
-    # (rsync with hardlinks typically uses much less, but we need buffer for new/changed files)
-    if available_gb < (source_gb * 0.2):
-        logger.warning(f"Low disk space: only {available_gb:.1f} GB available for {source_gb:.1f} GB source")
-        logger.warning("Consider cleaning up old backups or using a larger disk")
-    
-    # Calculate size of previous backup if it exists (for fallback calculation)
-    previous_backup_size = 0
-    link_dest_path = None
-    if last_link.exists() and last_link.is_symlink():
-        try:
-            previous_backup_path = last_link.resolve()
-            if previous_backup_path.exists():
-                previous_backup_size = get_directory_size(previous_backup_path)
-                link_dest_path = str(previous_backup_path)
-        except Exception:
-            pass
     
     # Get timeout and parallel thread settings
     timeout = getattr(config, 'contentstore_timeout', 86400)  # Default 24 hours
@@ -299,6 +257,55 @@ def backup_contentstore(config):
             return result
     
     # Local backup path (original logic)
+    if not config.backup_dir:
+        result['error'] = 'BACKUP_DIR not configured for local backup'
+        return result
+    
+    contentstore_dir = config.backup_dir / 'contentstore'
+    contentstore_dir.mkdir(parents=True, exist_ok=True)
+    destination = contentstore_dir / f'contentstore-{timestamp_str}'
+    last_link = contentstore_dir / 'last'
+    
+    result['path'] = str(destination)
+    
+    # Clean up any recent failed backup attempts first
+    cleanup_failed_backups(contentstore_dir, last_link)
+    
+    # Validate paths
+    try:
+        source = validate_path(source, must_exist=True)
+        destination = validate_path(destination, must_exist=False)
+    except ValueError as e:
+        result['error'] = f"Invalid path: {e}"
+        return result
+    
+    # Check available disk space before starting
+    import shutil
+    disk_stat = shutil.disk_usage(contentstore_dir)
+    available_gb = disk_stat.free / (1024**3)
+    source_size = get_directory_size(source)
+    source_gb = source_size / (1024**3)
+    
+    logger.info(f"Disk space check: {available_gb:.1f} GB available, source is {source_gb:.1f} GB")
+    
+    # Warn if less than 20% of source size is available
+    # (rsync with hardlinks typically uses much less, but we need buffer for new/changed files)
+    if available_gb < (source_gb * 0.2):
+        logger.warning(f"Low disk space: only {available_gb:.1f} GB available for {source_gb:.1f} GB source")
+        logger.warning("Consider cleaning up old backups or using a larger disk")
+    
+    # Calculate size of previous backup if it exists (for fallback calculation)
+    previous_backup_size = 0
+    link_dest_path = None
+    if last_link.exists() and last_link.is_symlink():
+        try:
+            previous_backup_path = last_link.resolve()
+            if previous_backup_path.exists():
+                previous_backup_size = get_directory_size(previous_backup_path)
+                link_dest_path = str(previous_backup_path)
+        except Exception:
+            pass
+    
     # Discover top-level directories for parallel processing
     top_level_dirs = discover_top_level_directories(source)
     

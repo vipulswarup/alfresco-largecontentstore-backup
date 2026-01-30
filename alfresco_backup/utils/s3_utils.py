@@ -88,6 +88,8 @@ def sync_to_s3(
         s3_dest,
         '--s3-provider', 'AWS',
         '--s3-region', region,
+        '--s3-access-key-id', access_key_id,
+        '--s3-secret-access-key', secret_access_key,
         '--transfers', str(parallel_transfers),
         '--checkers', str(parallel_transfers * 2),  # More checkers than transfers
         '--stats', '10s',  # Print stats every 10 seconds
@@ -210,6 +212,8 @@ def copy_file_to_s3(
         s3_dest,
         '--s3-provider', 'AWS',
         '--s3-region', region,
+        '--s3-access-key-id', access_key_id,
+        '--s3-secret-access-key', secret_access_key,
         '-v'  # Verbose for progress
     ]
     
@@ -282,6 +286,10 @@ def check_s3_versioning_enabled(
             'rclone',
             'lsjson',
             '--versions',
+            '--s3-provider', 'AWS',
+            '--s3-region', region,
+            '--s3-access-key-id', access_key_id,
+            '--s3-secret-access-key', secret_access_key,
             s3_path
         ]
         
@@ -405,6 +413,10 @@ def list_s3_postgres_backups(
             'rclone',
             'lsf',
             '--format', 'p',
+            '--s3-provider', 'AWS',
+            '--s3-region', region,
+            '--s3-access-key-id', access_key_id,
+            '--s3-secret-access-key', secret_access_key,
             s3_path
         ]
         
@@ -464,6 +476,10 @@ def list_s3_contentstore_versions(
             'rclone',
             'lsjson',
             '--versions',
+            '--s3-provider', 'AWS',
+            '--s3-region', region,
+            '--s3-access-key-id', access_key_id,
+            '--s3-secret-access-key', secret_access_key,
             s3_path
         ]
         
@@ -577,6 +593,8 @@ def download_from_s3(
         str(local_path),
         '--s3-provider', 'AWS',
         '--s3-region', region,
+        '--s3-access-key-id', access_key_id,
+        '--s3-secret-access-key', secret_access_key,
         '-v'
     ]
     

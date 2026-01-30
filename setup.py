@@ -102,6 +102,53 @@ def run_command(cmd: list, capture_output: bool = False, check: bool = True) -> 
         print_error(f"Error running command: {e}")
         return None
 
+def check_rclone_installed() -> bool:
+    """Check if rclone is installed."""
+    result = run_command(['which', 'rclone'], capture_output=True, check=False)
+    return result is not None and result.returncode == 0
+
+
+def install_rclone() -> bool:
+    """Install rclone using apt."""
+    print_info("Installing rclone...")
+    
+    if not is_running_as_root():
+        print_warning("Need sudo privileges to install rclone")
+        if not ask_yes_no("Install rclone with sudo?", default=True):
+            return False
+        
+        result = run_command(['sudo', 'apt-get', 'update'], capture_output=True, check=False)
+        if result is None or result.returncode != 0:
+            print_error("Failed to update apt package list")
+            return False
+        
+        result = run_command(['sudo', 'apt-get', 'install', '-y', 'rclone'], capture_output=True, check=False)
+        if result is None or result.returncode != 0:
+            print_error("Failed to install rclone")
+            if result and result.stderr:
+                print_error(f"Error: {result.stderr.strip()}")
+            return False
+    else:
+        result = run_command(['apt-get', 'update'], capture_output=True, check=False)
+        if result is None or result.returncode != 0:
+            print_error("Failed to update apt package list")
+            return False
+        
+        result = run_command(['apt-get', 'install', '-y', 'rclone'], capture_output=True, check=False)
+        if result is None or result.returncode != 0:
+            print_error("Failed to install rclone")
+            if result and result.stderr:
+                print_error(f"Error: {result.stderr.strip()}")
+            return False
+    
+    if check_rclone_installed():
+        print_success("rclone installed successfully")
+        return True
+    else:
+        print_error("rclone installation completed but rclone command not found")
+        return False
+
+
 def check_prerequisites(for_restore=False):
     """Check if required tools are installed."""
     if not for_restore:
@@ -192,6 +239,26 @@ def create_env_file():
         print_info("\n--- S3 Backup Configuration ---")
         print_info("S3 backup will store backups directly to S3 (requires rclone to be installed)")
         print_info("Note: S3 versioning should be enabled on your bucket for incremental backups")
+        
+        if not check_rclone_installed():
+            print_warning("rclone is not installed")
+            if ask_yes_no("Install rclone using apt?", default=True):
+                if not install_rclone():
+                    print_error("Failed to install rclone. Please install it manually:")
+                    print_info("  sudo apt-get update")
+                    print_info("  sudo apt-get install -y rclone")
+                    print_info("\nOr install from: https://rclone.org/install/")
+                    if not ask_yes_no("Continue without rclone? (S3 backups will fail)", default=False):
+                        return False
+            else:
+                print_warning("rclone is required for S3 backups")
+                print_info("Install it manually with:")
+                print("  sudo apt-get update")
+                print("  sudo apt-get install -y rclone")
+                print("\nOr install from: https://rclone.org/install/")
+                if not ask_yes_no("Continue without rclone? (S3 backups will fail)", default=False):
+                    return False
+        
         while True:
             s3_bucket = input(f"{Colors.OKCYAN}S3 bucket name: {Colors.ENDC}").strip()
             if s3_bucket:
@@ -1446,6 +1513,26 @@ def create_restore_env_file():
     if backup_location == '2':
         print_info("\n--- S3 Backup Configuration ---")
         print_info("S3 restore will download backups from S3 (requires rclone to be installed)")
+        
+        if not check_rclone_installed():
+            print_warning("rclone is not installed")
+            if ask_yes_no("Install rclone using apt?", default=True):
+                if not install_rclone():
+                    print_error("Failed to install rclone. Please install it manually:")
+                    print_info("  sudo apt-get update")
+                    print_info("  sudo apt-get install -y rclone")
+                    print_info("\nOr install from: https://rclone.org/install/")
+                    if not ask_yes_no("Continue without rclone? (S3 restore will fail)", default=False):
+                        return False
+            else:
+                print_warning("rclone is required for S3 restore")
+                print_info("Install it manually with:")
+                print("  sudo apt-get update")
+                print("  sudo apt-get install -y rclone")
+                print("\nOr install from: https://rclone.org/install/")
+                if not ask_yes_no("Continue without rclone? (S3 restore will fail)", default=False):
+                    return False
+        
         while True:
             s3_bucket = input(f"{Colors.OKCYAN}S3 bucket name: {Colors.ENDC}").strip()
             if s3_bucket:
