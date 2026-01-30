@@ -18,6 +18,16 @@ def apply_retention(config):
         'error': None
     }
     
+    # Skip retention policy if S3 is enabled (S3 versioning handles retention differently)
+    if getattr(config, 's3_enabled', False):
+        result['success'] = True
+        return result
+    
+    # Skip if backup_dir is not configured
+    if not config.backup_dir:
+        result['success'] = True
+        return result
+    
     errors = []
     deleted = []
     

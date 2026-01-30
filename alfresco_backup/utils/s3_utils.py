@@ -80,7 +80,7 @@ def sync_to_s3(
     # Build S3 destination path
     s3_dest = f"s3:{s3_bucket}/{s3_path.rstrip('/')}/"
     
-    # Build rclone command
+    # Build rclone command - use env auth with environment variables
     cmd = [
         'rclone',
         'sync',
@@ -88,8 +88,7 @@ def sync_to_s3(
         s3_dest,
         '--s3-provider', 'AWS',
         '--s3-region', region,
-        '--s3-access-key-id', access_key_id,
-        '--s3-secret-access-key', secret_access_key,
+        '--s3-env-auth', 'true',  # Use environment variables for auth
         '--transfers', str(parallel_transfers),
         '--checkers', str(parallel_transfers * 2),  # More checkers than transfers
         '--stats', '10s',  # Print stats every 10 seconds
@@ -204,7 +203,7 @@ def copy_file_to_s3(
     # Build S3 destination path
     s3_dest = f"s3:{s3_bucket}/{s3_path.lstrip('/')}"
     
-    # Build rclone command
+    # Build rclone command - use env auth with environment variables
     cmd = [
         'rclone',
         'copy',
@@ -212,8 +211,7 @@ def copy_file_to_s3(
         s3_dest,
         '--s3-provider', 'AWS',
         '--s3-region', region,
-        '--s3-access-key-id', access_key_id,
-        '--s3-secret-access-key', secret_access_key,
+        '--s3-env-auth', 'true',  # Use environment variables for auth
         '-v'  # Verbose for progress
     ]
     
@@ -288,8 +286,7 @@ def check_s3_versioning_enabled(
             '--versions',
             '--s3-provider', 'AWS',
             '--s3-region', region,
-            '--s3-access-key-id', access_key_id,
-            '--s3-secret-access-key', secret_access_key,
+            '--s3-env-auth', 'true',  # Use environment variables for auth
             s3_path
         ]
         
@@ -415,8 +412,7 @@ def list_s3_postgres_backups(
             '--format', 'p',
             '--s3-provider', 'AWS',
             '--s3-region', region,
-            '--s3-access-key-id', access_key_id,
-            '--s3-secret-access-key', secret_access_key,
+            '--s3-env-auth', 'true',  # Use environment variables for auth
             s3_path
         ]
         
@@ -478,8 +474,7 @@ def list_s3_contentstore_versions(
             '--versions',
             '--s3-provider', 'AWS',
             '--s3-region', region,
-            '--s3-access-key-id', access_key_id,
-            '--s3-secret-access-key', secret_access_key,
+            '--s3-env-auth', 'true',  # Use environment variables for auth
             s3_path
         ]
         
@@ -593,8 +588,7 @@ def download_from_s3(
         str(local_path),
         '--s3-provider', 'AWS',
         '--s3-region', region,
-        '--s3-access-key-id', access_key_id,
-        '--s3-secret-access-key', secret_access_key,
+        '--s3-env-auth', 'true',  # Use environment variables for auth
         '-v'
     ]
     
