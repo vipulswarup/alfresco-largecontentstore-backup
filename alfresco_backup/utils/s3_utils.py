@@ -77,18 +77,16 @@ def sync_to_s3(
         result['error'] = "rclone is not installed. Please install rclone to use S3 backups."
         return result
     
-    # Build S3 destination path
-    s3_dest = f"s3:{s3_bucket}/{s3_path.rstrip('/')}/"
+    # Build S3 destination path using connection string format
+    # Format: s3,provider=AWS,region=REGION,env_auth=true:bucket/path
+    s3_dest = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/{s3_path.rstrip('/')}/"
     
-    # Build rclone command - use env auth with environment variables
+    # Build rclone command - use connection string format
     cmd = [
         'rclone',
         'sync',
         str(source_path),
         s3_dest,
-        '--s3-provider', 'AWS',
-        '--s3-region', region,
-        '--s3-env-auth', 'true',  # Use environment variables for auth
         '--transfers', str(parallel_transfers),
         '--checkers', str(parallel_transfers * 2),  # More checkers than transfers
         '--stats', '10s',  # Print stats every 10 seconds
@@ -200,18 +198,16 @@ def copy_file_to_s3(
         result['error'] = "rclone is not installed. Please install rclone to use S3 backups."
         return result
     
-    # Build S3 destination path
-    s3_dest = f"s3:{s3_bucket}/{s3_path.lstrip('/')}"
+    # Build S3 destination path using connection string format
+    # Format: s3,provider=AWS,region=REGION,env_auth=true:bucket/path
+    s3_dest = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/{s3_path.lstrip('/')}"
     
-    # Build rclone command - use env auth with environment variables
+    # Build rclone command - use connection string format
     cmd = [
         'rclone',
         'copy',
         str(source_file),
         s3_dest,
-        '--s3-provider', 'AWS',
-        '--s3-region', region,
-        '--s3-env-auth', 'true',  # Use environment variables for auth
         '-v'  # Verbose for progress
     ]
     
@@ -279,14 +275,12 @@ def check_s3_versioning_enabled(
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
-        s3_path = f"s3:{s3_bucket}/alfresco-backups/"
+        # Build S3 path using connection string format
+        s3_path = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/alfresco-backups/"
         cmd = [
             'rclone',
             'lsjson',
             '--versions',
-            '--s3-provider', 'AWS',
-            '--s3-region', region,
-            '--s3-env-auth', 'true',  # Use environment variables for auth
             s3_path
         ]
         
@@ -402,7 +396,8 @@ def list_s3_postgres_backups(
         return []
     
     backups = []
-    s3_path = f"s3:{s3_bucket}/alfresco-backups/postgres/"
+    # Build S3 path using connection string format
+    s3_path = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/alfresco-backups/postgres/"
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
@@ -410,9 +405,6 @@ def list_s3_postgres_backups(
             'rclone',
             'lsf',
             '--format', 'p',
-            '--s3-provider', 'AWS',
-            '--s3-region', region,
-            '--s3-env-auth', 'true',  # Use environment variables for auth
             s3_path
         ]
         
@@ -464,7 +456,8 @@ def list_s3_contentstore_versions(
         return []
     
     versions = []
-    s3_path = f"s3:{s3_bucket}/alfresco-backups/contentstore/"
+    # Build S3 path using connection string format
+    s3_path = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/alfresco-backups/contentstore/"
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
@@ -472,9 +465,6 @@ def list_s3_contentstore_versions(
             'rclone',
             'lsjson',
             '--versions',
-            '--s3-provider', 'AWS',
-            '--s3-region', region,
-            '--s3-env-auth', 'true',  # Use environment variables for auth
             s3_path
         ]
         
@@ -575,8 +565,10 @@ def download_from_s3(
         result['error'] = "rclone is not installed. Please install rclone to use S3 restore."
         return result
     
-    s3_source = f"s3:{s3_bucket}/{s3_path.lstrip('/')}"
+    # Build S3 source path using connection string format
+    s3_source = f"s3,provider=AWS,region={region},env_auth=true:{s3_bucket}/{s3_path.lstrip('/')}"
     if version_id:
+        # For versioned objects, append version ID to the path
         s3_source = f"{s3_source}?versionId={version_id}"
     
     local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -586,9 +578,6 @@ def download_from_s3(
         'copy',
         s3_source,
         str(local_path),
-        '--s3-provider', 'AWS',
-        '--s3-region', region,
-        '--s3-env-auth', 'true',  # Use environment variables for auth
         '-v'
     ]
     
