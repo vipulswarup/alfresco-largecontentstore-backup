@@ -4,6 +4,7 @@ import os
 import subprocess
 import logging
 import tempfile
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -125,27 +126,73 @@ def sync_to_s3(
             result['success'] = True
             
             # Parse rclone stats from output
+            # rclone outputs stats in format like:
+            # "Transferred: 1.234 GiB / 5.678 GiB, 22%, 12.34 MiB/s, ETA 6m32s"
+            # or "Transferred:   123.456 k / 123.456 k, 100%, 1.234 MB/s, ETA 0s"
+            # We need the first number (actual transferred amount) before the "/"
             output = process.stdout + process.stderr
+            last_transferred_value = None
+            
             for line in output.split('\n'):
                 if 'Transferred:' in line:
-                    # Parse "Transferred:   123.456 k / 123.456 k, 100%, 1.234 MB/s, ETA 0s"
                     try:
-                        parts = line.split('Transferred:')[1].split(',')[0].strip()
-                        # Extract bytes (handle k, M, G suffixes)
-                        if 'k' in parts.lower():
-                            bytes_str = parts.split('k')[0].strip()
-                            result['bytes_transferred'] = float(bytes_str) * 1024
-                        elif 'M' in parts.upper():
-                            bytes_str = parts.split('M')[0].strip()
-                            result['bytes_transferred'] = float(bytes_str) * 1024 * 1024
-                        elif 'G' in parts.upper():
-                            bytes_str = parts.split('G')[0].strip()
-                            result['bytes_transferred'] = float(bytes_str) * 1024 * 1024 * 1024
-                    except (ValueError, IndexError):
+                        # Extract the part after "Transferred:"
+                        transferred_part = line.split('Transferred:')[1].strip()
+                        # Get the first number and unit (before "/" if present, or before ",")
+                        if '/' in transferred_part:
+                            amount_str = transferred_part.split('/')[0].strip()
+                        else:
+                            amount_str = transferred_part.split(',')[0].strip()
+                        
+                        # Parse the number and unit
+                        # Handle formats like "1.234 GiB", "123.456 k", "5.678 M", etc.
+                        amount_str = amount_str.strip()
+                        if not amount_str:
+                            continue
+                            
+                        # Extract numeric part and unit
+                        # Match formats like "1.234 GiB", "123.456 k", "5.678 MB", etc.
+                        # Pattern: number followed by optional space and unit (K/M/G/T with optional i and/or B)
+                        match = re.match(r'([\d.]+)\s*([KMGTkmgt][iI]?[bB]?)', amount_str)
+                        if match:
+                            number = float(match.group(1))
+                            unit = match.group(2).upper()
+                            
+                            # Determine if binary (i present) or decimal unit
+                            is_binary = 'I' in unit
+                            base_unit = unit[0]  # K, M, G, or T
+                            
+                            # Convert to bytes based on unit
+                            if base_unit == 'K':
+                                multiplier = 1024 if is_binary else 1000
+                                bytes_value = number * multiplier
+                            elif base_unit == 'M':
+                                multiplier = 1024 * 1024 if is_binary else 1000 * 1000
+                                bytes_value = number * multiplier
+                            elif base_unit == 'G':
+                                multiplier = 1024 * 1024 * 1024 if is_binary else 1000 * 1000 * 1000
+                                bytes_value = number * multiplier
+                            elif base_unit == 'T':
+                                multiplier = 1024 * 1024 * 1024 * 1024 if is_binary else 1000 * 1000 * 1000 * 1000
+                                bytes_value = number * multiplier
+                            else:
+                                # Fallback: assume bytes if unknown unit
+                                bytes_value = number
+                            
+                            last_transferred_value = int(bytes_value)
+                    except (ValueError, IndexError, AttributeError) as e:
+                        logger.debug(f"Could not parse Transferred line: {line[:100]}, error: {e}")
                         pass
-                elif 'Elapsed time:' in line:
-                    # Already have duration, but could parse for verification
-                    pass
+            
+            # Use the last (final) transferred value
+            if last_transferred_value is not None:
+                result['bytes_transferred'] = last_transferred_value
+                logger.info(f"Parsed bytes_transferred from rclone output: {last_transferred_value / (1024*1024):.2f} MB")
+            else:
+                logger.warning("Could not parse bytes_transferred from rclone output. Output may be in unexpected format.")
+                # Log a sample of the output for debugging (last 1000 chars)
+                output_sample = (process.stdout + process.stderr)[-1000:] if (process.stdout + process.stderr) else "No output"
+                logger.debug(f"Last 1000 chars of rclone output: {output_sample}")
         
         else:
             error_msg = process.stderr if process.stderr else process.stdout
