@@ -5,6 +5,7 @@ import subprocess
 import logging
 import tempfile
 import re
+import json
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -41,6 +42,80 @@ def get_rclone_env(access_key_id: str, secret_access_key: str, region: str) -> D
     env['RCLONE_CONFIG_S3_REGION'] = region
     env['RCLONE_CONFIG_S3_ENV_AUTH'] = 'false'  # Use explicit credentials, not env vars
     return env
+
+
+def get_s3_folder_size(
+    s3_bucket: str,
+    s3_path: str,
+    access_key_id: str,
+    secret_access_key: str,
+    region: str,
+    timeout: Optional[int] = 300
+) -> Optional[int]:
+    """
+    Get the total size in bytes of a folder in S3 using rclone size command.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        s3_path: Path within bucket (e.g., 'alfresco-backups/contentstore/')
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+        timeout: Timeout in seconds (default: 300)
+    
+    Returns:
+        Total size in bytes, or None if error occurs
+    """
+    if not check_rclone_installed():
+        logger.warning("rclone is not installed. Cannot get S3 folder size.")
+        return None
+    
+    # Build S3 path - 's3' remote is created via RCLONE_CONFIG_S3_* env vars
+    s3_full_path = f"s3:{s3_bucket}/{s3_path.rstrip('/')}/"
+    
+    # Build rclone size command
+    cmd = [
+        'rclone',
+        'size',
+        s3_full_path,
+        '--json'  # JSON output for easier parsing
+    ]
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        process = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        
+        if process.returncode == 0:
+            try:
+                data = json.loads(process.stdout)
+                # rclone size --json returns: {"count": N, "bytes": M, "sizestring": "..."}
+                size_bytes = data.get('bytes', 0)
+                logger.debug(f"S3 folder size for {s3_full_path}: {size_bytes} bytes ({size_bytes / (1024*1024):.2f} MB)")
+                return int(size_bytes)
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                logger.warning(f"Could not parse rclone size JSON output: {e}")
+                return None
+        else:
+            # If folder doesn't exist yet (first backup), rclone returns non-zero
+            # This is expected and not an error
+            if "directory not found" in process.stderr.lower() or "couldn't find" in process.stderr.lower():
+                logger.debug(f"S3 folder {s3_full_path} does not exist yet (first backup)")
+                return 0
+            logger.warning(f"rclone size failed: {process.stderr[:200]}")
+            return None
+    
+    except subprocess.TimeoutExpired:
+        logger.warning(f"rclone size timed out after {timeout} seconds")
+        return None
+    except Exception as e:
+        logger.warning(f"Error getting S3 folder size: {str(e)}")
+        return None
 
 
 def sync_to_s3(

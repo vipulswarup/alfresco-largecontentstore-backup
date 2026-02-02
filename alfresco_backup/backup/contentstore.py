@@ -207,7 +207,7 @@ def backup_contentstore(config):
         logger.info("S3 backup enabled - syncing live contentstore directly to S3")
         
         try:
-            from alfresco_backup.utils.s3_utils import sync_to_s3, check_rclone_installed, check_s3_versioning_enabled, enable_s3_versioning
+            from alfresco_backup.utils.s3_utils import sync_to_s3, check_rclone_installed, check_s3_versioning_enabled, enable_s3_versioning, get_s3_folder_size
             
             if not check_rclone_installed():
                 result['error'] = "rclone is not installed. Please install rclone to use S3 backups."
@@ -223,6 +223,21 @@ def backup_contentstore(config):
             s3_path = "alfresco-backups/contentstore/"
             logger.info(f"Syncing contentstore to S3: {source} -> s3://{config.s3_bucket}/{s3_path}")
             
+            # Get S3 folder size before sync
+            before_size_bytes = get_s3_folder_size(
+                config.s3_bucket,
+                s3_path,
+                config.s3_access_key_id,
+                config.s3_secret_access_key,
+                config.s3_region,
+                timeout=300
+            )
+            if before_size_bytes is None:
+                before_size_bytes = 0
+                logger.info("Could not determine S3 folder size before sync (may be first backup or empty folder)")
+            else:
+                logger.info(f"S3 folder size before sync: {before_size_bytes / (1024*1024):.2f} MB")
+            
             s3_result = sync_to_s3(
                 source,
                 config.s3_bucket,
@@ -235,13 +250,29 @@ def backup_contentstore(config):
             )
             
             if s3_result['success']:
+                # Get S3 folder size after sync
+                after_size_bytes = get_s3_folder_size(
+                    config.s3_bucket,
+                    s3_path,
+                    config.s3_access_key_id,
+                    config.s3_secret_access_key,
+                    config.s3_region,
+                    timeout=300
+                )
+                
+                if after_size_bytes is not None:
+                    bytes_transferred = after_size_bytes - before_size_bytes
+                    result['bytes_transferred'] = bytes_transferred
+                    result['additional_size_mb'] = bytes_transferred / (1024 * 1024)
+                    logger.info(f"S3 folder size after sync: {after_size_bytes / (1024*1024):.2f} MB")
+                    logger.info(f"Additional data backed up: {result['additional_size_mb']:.2f} MB")
+                else:
+                    logger.warning("Could not determine S3 folder size after sync - size calculation unavailable")
+                
                 result['success'] = True
                 result['duration'] = s3_result['duration']
                 result['s3_path'] = f"s3://{config.s3_bucket}/{s3_path}"
                 result['files_transferred'] = s3_result.get('files_transferred')
-                result['bytes_transferred'] = s3_result.get('bytes_transferred')
-                if result.get('bytes_transferred'):
-                    result['additional_size_mb'] = result['bytes_transferred'] / (1024 * 1024)
                 result['parallel_threads_used'] = parallel_threads
                 logger.info(f"Contentstore synced to S3 successfully ({s3_result['duration']:.1f}s)")
             else:
