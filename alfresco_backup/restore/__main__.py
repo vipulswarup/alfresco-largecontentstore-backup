@@ -464,26 +464,41 @@ class AlfrescoRestore:
         """Validate contentstore backup exists and has content."""
         if self.config.s3_enabled:
             try:
-                from alfresco_backup.utils.s3_utils import check_rclone_installed, list_s3_contentstore_versions
+                from alfresco_backup.utils.s3_utils import check_rclone_installed, get_s3_folder_size
                 if not check_rclone_installed():
                     self.logger.error("rclone is not installed. Please install rclone to use S3 restore.")
                     return False
                 
-                versions = list_s3_contentstore_versions(
+                # Validate timestamp format
+                try:
+                    datetime.strptime(timestamp, '%Y-%m-%d_%H-%M-%S')
+                except ValueError:
+                    self.logger.error(f"Invalid timestamp format: {timestamp}")
+                    return False
+                
+                # For S3 PITR, we use --s3-version-at which doesn't require exact timestamp match
+                # Just verify the contentstore path exists in S3
+                s3_path = "alfresco-backups/contentstore/"
+                folder_size = get_s3_folder_size(
                     self.config.s3_bucket,
+                    s3_path,
                     self.config.s3_access_key_id,
                     self.config.s3_secret_access_key,
-                    self.config.s3_region
+                    self.config.s3_region,
+                    timeout=30
                 )
                 
-                target_timestamp = datetime.strptime(timestamp, '%Y-%m-%d_%H-%M-%S')
-                for version in versions:
-                    if version['timestamp'].strftime('%Y-%m-%d_%H-%M-%S') == timestamp:
-                        self.logger.info(f"Contentstore backup version found in S3: {timestamp}")
-                        return True
+                if folder_size is None:
+                    self.logger.error("Could not verify contentstore exists in S3")
+                    return False
                 
-                self.logger.error(f"Contentstore backup version not found in S3: {timestamp}")
-                return False
+                if folder_size == 0:
+                    self.logger.warning("Contentstore path exists in S3 but appears empty")
+                    return False
+                
+                self.logger.info(f"Contentstore backup validated in S3 (size: {folder_size / (1024*1024):.2f} MB)")
+                self.logger.info(f"Will restore to timestamp: {timestamp} using S3 versioning")
+                return True
             except Exception as e:
                 self.logger.error(f"Error validating S3 contentstore backup: {e}")
                 return False
