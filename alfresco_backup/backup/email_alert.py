@@ -23,17 +23,17 @@ def send_failure_alert(backup_results, config):
     
     customer_name = getattr(config, 'customer_name', '').strip()
     if customer_name:
-        subject = f"ALERT: Alfresco Backup Failed - {customer_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        subject = f"ALERT: EisenVault Backup Failed - {customer_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         body_parts = [
-            f"Alfresco backup process encountered failures for: {customer_name}\n",
+            f"EisenVault backup process encountered failures for: {customer_name}\n",
             "=" * 70,
             f"\nFAILURE SUMMARY - {customer_name}\n",
             "=" * 70,
         ]
     else:
-        subject = f"ALERT: Alfresco Backup Failed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        subject = f"ALERT: EisenVault Backup Failed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         body_parts = [
-            "Alfresco backup process encountered failures.\n",
+            "EisenVault backup process encountered failures.\n",
             "=" * 70,
             "\nFAILURE SUMMARY\n",
             "=" * 70,
@@ -235,17 +235,17 @@ def send_success_alert(backup_results, config):
     
     customer_name = getattr(config, 'customer_name', '').strip()
     if customer_name:
-        subject = f"SUCCESS: Alfresco Backup Completed - {customer_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        subject = f"SUCCESS: EisenVault Backup Completed - {customer_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         body_parts = [
-            f"Alfresco backup process completed successfully for: {customer_name}\n",
+            f"EisenVault backup process completed successfully for: {customer_name}\n",
             "=" * 70,
             f"\nBACKUP SUMMARY - {customer_name}\n",
             "=" * 70,
         ]
     else:
-        subject = f"SUCCESS: Alfresco Backup Completed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        subject = f"SUCCESS: EisenVault Backup Completed - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         body_parts = [
-            "Alfresco backup process completed successfully.\n",
+            "EisenVault backup process completed successfully.\n",
             "=" * 70,
             "\nBACKUP SUMMARY\n",
             "=" * 70,
