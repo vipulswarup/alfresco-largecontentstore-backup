@@ -1311,21 +1311,33 @@ def main():
             logger.section("Full System Restore")
             
             pg_backups = restore.list_postgres_backups()
-            cs_backups = restore.list_contentstore_backups()
             
-            if not pg_backups or not cs_backups:
-                logger.error("No backups found for full system restore")
+            if not pg_backups:
+                logger.error("No PostgreSQL backups found for full system restore")
                 sys.exit(1)
+            
+            if config.s3_enabled:
+                cs_backups = pg_backups
+                logger.info("S3 mode: Using PostgreSQL backup timestamps for contentstore restore")
+            else:
+                cs_backups = restore.list_contentstore_backups()
+                if not cs_backups:
+                    logger.error("No contentstore backups found for full system restore")
+                    sys.exit(1)
             
             pg_timestamp = select_backup(pg_backups, "PostgreSQL")
             if not pg_timestamp:
                 logger.error("No PostgreSQL backup selected")
                 sys.exit(1)
             
-            cs_timestamp = select_backup(cs_backups, "Contentstore")
-            if not cs_timestamp:
-                logger.error("No contentstore backup selected")
-                sys.exit(1)
+            if config.s3_enabled:
+                cs_timestamp = pg_timestamp
+                logger.info("S3 mode: Contentstore will be restored to match PostgreSQL backup timestamp")
+            else:
+                cs_timestamp = select_backup(cs_backups, "Contentstore")
+                if not cs_timestamp:
+                    logger.error("No contentstore backup selected")
+                    sys.exit(1)
             
             logger.info(f"Selected PostgreSQL backup: {pg_timestamp}")
             logger.info(f"Selected Contentstore backup: {cs_timestamp}")
@@ -1396,9 +1408,14 @@ def main():
             
             # Step 7: Restore Contentstore
             logger.section("Restoring Contentstore")
-            if not restore.restore_contentstore(cs_timestamp):
-                logger.error("Contentstore restore failed")
-                sys.exit(1)
+            if config.s3_enabled:
+                if not restore.restore_contentstore_pitr(cs_timestamp):
+                    logger.error("Contentstore restore failed")
+                    sys.exit(1)
+            else:
+                if not restore.restore_contentstore(cs_timestamp):
+                    logger.error("Contentstore restore failed")
+                    sys.exit(1)
             
             # Step 8: Start Tomcat (PostgreSQL is already running)
             logger.section("Starting Tomcat")

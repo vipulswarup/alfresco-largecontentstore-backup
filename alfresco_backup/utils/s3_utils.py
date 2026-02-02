@@ -838,6 +838,7 @@ def restore_contentstore_from_s3_version(
         cmd.extend(['--timeout', f'{timeout}s'])
     
     logger.info(f"Restoring contentstore from S3 to timestamp {version_at_str}: {s3_source} -> {local_path}")
+    logger.info(f"Using rclone command: {' '.join(cmd[:6])}... [truncated]")
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
@@ -852,12 +853,33 @@ def restore_contentstore_from_s3_version(
         duration = time.time() - start_time
         result['duration'] = duration
         
+        # Log output for debugging
+        if process.stdout:
+            logger.debug(f"rclone stdout (last 1000 chars): {process.stdout[-1000:]}")
+        if process.stderr:
+            logger.debug(f"rclone stderr (last 1000 chars): {process.stderr[-1000:]}")
+        
         if process.returncode == 0:
             result['success'] = True
+            # Check if files were actually restored
+            if local_path.exists():
+                file_count = sum(1 for _ in local_path.rglob('*') if _.is_file())
+                total_size = sum(f.stat().st_size for f in local_path.rglob('*') if f.is_file())
+                logger.info(f"Contentstore restore completed: {file_count} files, {total_size / (1024*1024):.2f} MB")
+                if file_count == 0:
+                    logger.warning("WARNING: No files found in restored contentstore directory!")
+                    result['error'] = "Restore completed but no files were found"
+                    result['success'] = False
+            else:
+                logger.error("Restore completed but destination directory does not exist")
+                result['error'] = "Destination directory was not created"
+                result['success'] = False
         else:
             error_msg = process.stderr if process.stderr else process.stdout
             result['error'] = f"rclone restore failed with exit code {process.returncode}: {error_msg[:500]}"
             logger.error(result['error'])
+            if process.stdout:
+                logger.error(f"rclone stdout: {process.stdout[:1000]}")
     
     except subprocess.TimeoutExpired:
         duration = time.time() - start_time
