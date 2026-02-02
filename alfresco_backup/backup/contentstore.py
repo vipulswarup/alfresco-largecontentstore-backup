@@ -240,6 +240,8 @@ def backup_contentstore(config):
                 result['s3_path'] = f"s3://{config.s3_bucket}/{s3_path}"
                 result['files_transferred'] = s3_result.get('files_transferred')
                 result['bytes_transferred'] = s3_result.get('bytes_transferred')
+                if result.get('bytes_transferred'):
+                    result['additional_size_mb'] = result['bytes_transferred'] / (1024 * 1024)
                 result['parallel_threads_used'] = parallel_threads
                 logger.info(f"Contentstore synced to S3 successfully ({s3_result['duration']:.1f}s)")
             else:
