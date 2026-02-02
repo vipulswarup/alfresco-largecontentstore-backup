@@ -982,6 +982,7 @@ def get_config() -> RestoreConfig:
     config = RestoreConfig()
     
     # Track what was loaded from .env to avoid re-prompting
+    # Initialize outside try block so it's available in interactive section
     env_loaded = {
         'backup_dir': False,
         'alf_base_dir': False,
@@ -992,6 +993,12 @@ def get_config() -> RestoreConfig:
         's3_secret_access_key': False
     }
     
+    # Variables to hold .env values for use in interactive section
+    backup_dir = None
+    alf_base_dir = None
+    alfresco_user = None
+    s3_bucket = None
+    
     # Try to load from .env file first
     try:
         from dotenv import load_dotenv
@@ -1001,6 +1008,8 @@ def get_config() -> RestoreConfig:
         alf_base_dir = os.getenv('ALF_BASE_DIR')
         alfresco_user = os.getenv('ALFRESCO_USER')
         s3_bucket = os.getenv('S3_BUCKET')
+        
+        # Store values for use in interactive section
         
         if backup_dir:
             env_loaded['backup_dir'] = True
@@ -1057,8 +1066,30 @@ def get_config() -> RestoreConfig:
     print("=" * 80)
     print("\nPlease provide the following information:\n")
     
-    # Determine backup location type if not already set
-    if not config.s3_enabled:
+    # Determine backup location type
+    # If S3_BUCKET is in .env, S3 is already enabled - skip location prompt
+    if config.s3_enabled or env_loaded['s3_bucket']:
+        # S3 is enabled (from .env or will be), prompt only for missing S3 credentials
+        if not env_loaded['s3_bucket']:
+            config.s3_bucket = ask_question("S3 bucket name (S3_BUCKET)")
+        elif s3_bucket:
+            config.s3_bucket = s3_bucket
+        if not env_loaded['s3_region']:
+            config.s3_region = ask_question("S3 region (S3_REGION)", config.s3_region or "us-east-1")
+        elif os.getenv('S3_REGION'):
+            config.s3_region = os.getenv('S3_REGION', 'us-east-1')
+        if not env_loaded['s3_access_key_id']:
+            config.s3_access_key_id = ask_question("AWS Access Key ID (AWS_ACCESS_KEY_ID)")
+        elif os.getenv('AWS_ACCESS_KEY_ID'):
+            config.s3_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
+        if not env_loaded['s3_secret_access_key']:
+            config.s3_secret_access_key = ask_question("AWS Secret Access Key (AWS_SECRET_ACCESS_KEY)")
+        elif os.getenv('AWS_SECRET_ACCESS_KEY'):
+            config.s3_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+        # Ensure s3_enabled is set
+        config.s3_enabled = True
+    else:
+        # No S3 config in .env, ask user to choose
         print("Backup location:")
         print("  1. Local directory")
         print("  2. S3 bucket")
@@ -1072,26 +1103,18 @@ def get_config() -> RestoreConfig:
             config.s3_secret_access_key = ask_question("AWS Secret Access Key (AWS_SECRET_ACCESS_KEY)")
         else:
             # Local backup directory
-            while True:
-                backup_dir = ask_question("Backup directory path (BACKUP_DIR)")
-                if Path(backup_dir).exists():
-                    config.backup_dir = backup_dir
-                    break
-                print(f"Error: Directory does not exist: {backup_dir}\n")
-    else:
-        # S3 is already enabled from .env, but may need to prompt for missing S3 credentials
-        if not config.s3_bucket:
-            config.s3_bucket = ask_question("S3 bucket name (S3_BUCKET)")
-        if not config.s3_region:
-            config.s3_region = ask_question("S3 region (S3_REGION)", "us-east-1")
-        if not config.s3_access_key_id:
-            config.s3_access_key_id = ask_question("AWS Access Key ID (AWS_ACCESS_KEY_ID)")
-        if not config.s3_secret_access_key:
-            config.s3_secret_access_key = ask_question("AWS Secret Access Key (AWS_SECRET_ACCESS_KEY)")
-        # Skip BACKUP_DIR prompt when S3 is enabled
+            if not env_loaded['backup_dir']:
+                while True:
+                    backup_dir_input = ask_question("Backup directory path (BACKUP_DIR)")
+                    if Path(backup_dir_input).exists():
+                        config.backup_dir = backup_dir_input
+                        break
+                    print(f"Error: Directory does not exist: {backup_dir_input}\n")
+            elif backup_dir:
+                config.backup_dir = backup_dir
     
-    # Only prompt for alf_base_dir if not already set
-    if not config.alf_base_dir:
+    # Only prompt for alf_base_dir if not already set from .env
+    if not env_loaded['alf_base_dir']:
         while True:
             alf_base = ask_question("Alfresco base directory (ALF_BASE_DIR)")
             alf_base_path = Path(alf_base)
@@ -1099,17 +1122,14 @@ def get_config() -> RestoreConfig:
                 config.alf_base_dir = alf_base_path
                 break
             print(f"Error: Directory does not exist: {alf_base}\n")
+    elif alf_base_dir and Path(alf_base_dir).exists():
+        config.alf_base_dir = Path(alf_base_dir)
     
-    # Only prompt for alfresco_user if not already set (check if it's still the default)
-    default_user = os.environ.get('USER', os.environ.get('USERNAME', 'alfresco'))
-    if not config.alfresco_user or config.alfresco_user == default_user:
-        # Check if it was set from .env
-        env_user = os.getenv('ALFRESCO_USER')
-        if env_user and config.alfresco_user == env_user:
-            # Already set from .env, don't prompt
-            pass
-        else:
-            config.alfresco_user = ask_question("Alfresco username", config.alfresco_user)
+    # Only prompt for alfresco_user if not already set from .env
+    if not env_loaded['alfresco_user']:
+        config.alfresco_user = ask_question("Alfresco username", config.alfresco_user)
+    elif alfresco_user:
+        config.alfresco_user = alfresco_user
     
     # Only prompt for log_dir if not already set
     if not config.restore_log_dir:
