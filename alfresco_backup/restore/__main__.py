@@ -959,12 +959,37 @@ def get_config() -> RestoreConfig:
     print("=" * 80)
     print("\nPlease provide the following information:\n")
     
-    while True:
-        backup_dir = ask_question("Backup directory path (BACKUP_DIR)")
-        if Path(backup_dir).exists():
-            config.backup_dir = backup_dir
-            break
-        print(f"Error: Directory does not exist: {backup_dir}\n")
+    # Determine backup location type if not already set
+    if not config.s3_enabled:
+        print("Backup location:")
+        print("  1. Local directory")
+        print("  2. S3 bucket")
+        backup_location = input("Select backup location (1 or 2) [1]: ").strip() or '1'
+        
+        if backup_location == '2':
+            config.s3_enabled = True
+            config.s3_bucket = ask_question("S3 bucket name (S3_BUCKET)")
+            config.s3_region = ask_question("S3 region (S3_REGION)", "us-east-1")
+            config.s3_access_key_id = ask_question("AWS Access Key ID (AWS_ACCESS_KEY_ID)")
+            config.s3_secret_access_key = ask_question("AWS Secret Access Key (AWS_SECRET_ACCESS_KEY)")
+        else:
+            # Local backup directory
+            while True:
+                backup_dir = ask_question("Backup directory path (BACKUP_DIR)")
+                if Path(backup_dir).exists():
+                    config.backup_dir = backup_dir
+                    break
+                print(f"Error: Directory does not exist: {backup_dir}\n")
+    else:
+        # S3 is already enabled from .env, but may need to prompt for missing S3 credentials
+        if not config.s3_bucket:
+            config.s3_bucket = ask_question("S3 bucket name (S3_BUCKET)")
+        if not config.s3_region:
+            config.s3_region = ask_question("S3 region (S3_REGION)", "us-east-1")
+        if not config.s3_access_key_id:
+            config.s3_access_key_id = ask_question("AWS Access Key ID (AWS_ACCESS_KEY_ID)")
+        if not config.s3_secret_access_key:
+            config.s3_secret_access_key = ask_question("AWS Secret Access Key (AWS_SECRET_ACCESS_KEY)")
     
     while True:
         alf_base = ask_question("Alfresco base directory (ALF_BASE_DIR)")
