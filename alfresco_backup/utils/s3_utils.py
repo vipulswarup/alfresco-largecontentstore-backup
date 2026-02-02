@@ -544,9 +544,13 @@ def list_s3_postgres_backups(
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
+        
+        # Try recursive listing first to find actual files
+        # rclone lsf with -R lists recursively and shows full paths
         cmd = [
             'rclone',
             'lsf',
+            '-R',
             '--format', 'p',
             s3_path
         ]
@@ -560,15 +564,114 @@ def list_s3_postgres_backups(
         )
         
         if process.returncode == 0:
+            if process.stdout.strip():
+                logger.debug(f"rclone lsf -R output: {process.stdout[:500]}")
             for line in process.stdout.split('\n'):
                 line = line.strip()
-                if line and line.startswith('postgres-') and line.endswith('.sql.gz'):
-                    timestamp = line.replace('postgres-', '').replace('.sql.gz', '')
+                if not line:
+                    continue
+                
+                # Handle both file paths and folder names
+                # Files: alfresco-backups/postgres/postgres-2026-02-02_02-00-01.sql.gz
+                # Folders/prefixes: postgres-2026-02-02_02-00-01.sql.gz/ or postgres-2026-02-02_02-00-01.sql.gz
+                filename = line.split('/')[-1]  # Get last component
+                if filename.startswith('postgres-') and filename.endswith('.sql.gz'):
+                    # Remove trailing slash if present (folder/prefix)
+                    filename = filename.rstrip('/')
+                    timestamp = filename.replace('postgres-', '').replace('.sql.gz', '')
                     try:
                         datetime.strptime(timestamp, '%Y-%m-%d_%H-%M-%S')
-                        backups.append(timestamp)
+                        if timestamp not in backups:
+                            backups.append(timestamp)
                     except ValueError:
                         continue
+        else:
+            logger.warning(f"rclone lsf -R failed: {process.stderr[:200]}")
+        
+        # If no backups found with recursive, try non-recursive (in case files are direct children)
+        if not backups:
+            cmd = [
+                'rclone',
+                'lsf',
+                '--format', 'p',
+                s3_path
+            ]
+            
+            process = subprocess.run(
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if process.returncode == 0:
+                if process.stdout.strip():
+                    logger.debug(f"rclone lsf output: {process.stdout[:500]}")
+                for line in process.stdout.split('\n'):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Remove trailing slash if present
+                    filename = line.rstrip('/')
+                    if filename.startswith('postgres-') and filename.endswith('.sql.gz'):
+                        timestamp = filename.replace('postgres-', '').replace('.sql.gz', '')
+                        try:
+                            datetime.strptime(timestamp, '%Y-%m-%d_%H-%M-%S')
+                            if timestamp not in backups:
+                                backups.append(timestamp)
+                        except ValueError:
+                            continue
+            else:
+                logger.warning(f"rclone lsf failed: {process.stderr[:200]}")
+        
+        # If still no backups, try rclone ls (shows files with sizes, filters out empty prefixes)
+        if not backups:
+            cmd = [
+                'rclone',
+                'ls',
+                s3_path
+            ]
+            
+            process = subprocess.run(
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if process.returncode == 0:
+                if process.stdout.strip():
+                    logger.debug(f"rclone ls output: {process.stdout[:500]}")
+                for line in process.stdout.split('\n'):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # rclone ls format: size path
+                    # Example: 1234567 alfresco-backups/postgres/postgres-2026-02-02_02-00-01.sql.gz
+                    parts = line.split(None, 1)  # Split on whitespace, max 1 split
+                    if len(parts) == 2:
+                        file_path = parts[1]
+                        filename = file_path.split('/')[-1]
+                        if filename.startswith('postgres-') and filename.endswith('.sql.gz'):
+                            timestamp = filename.replace('postgres-', '').replace('.sql.gz', '')
+                            try:
+                                datetime.strptime(timestamp, '%Y-%m-%d_%H-%M-%S')
+                                if timestamp not in backups:
+                                    backups.append(timestamp)
+                            except ValueError:
+                                continue
+        
+        if backups:
+            logger.info(f"Found {len(backups)} PostgreSQL backups in S3")
+        else:
+            logger.warning(f"No PostgreSQL backups found in S3 at {s3_path}")
+            # Log the last command's output for debugging
+            if 'process' in locals() and process.returncode != 0:
+                logger.warning(f"Last rclone command failed: stdout={process.stdout[:500]}, stderr={process.stderr[:500]}")
         
         return sorted(backups, reverse=True)
     
