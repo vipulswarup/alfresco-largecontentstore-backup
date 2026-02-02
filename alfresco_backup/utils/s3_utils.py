@@ -669,6 +669,108 @@ def get_s3_version_by_date(
     return None
 
 
+def restore_contentstore_from_s3_version(
+    s3_bucket: str,
+    s3_path: str,
+    local_path: Path,
+    access_key_id: str,
+    secret_access_key: str,
+    region: str,
+    target_timestamp: datetime,
+    timeout: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Restore contentstore from S3 using versioning to restore files to their state at target timestamp.
+    
+    Uses rclone with --s3-version-at to restore each file to its version at the target time.
+    This enables point-in-time recovery by restoring files that were deleted after the target time.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        s3_path: Path within bucket (e.g., 'alfresco-backups/contentstore/')
+        local_path: Local destination path
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+        target_timestamp: Target datetime to restore to (files will be restored to versions at or before this time)
+        timeout: Timeout in seconds (optional)
+    
+    Returns:
+        dict with keys: success, error, duration
+    """
+    import time
+    
+    start_time = time.time()
+    result = {
+        'success': False,
+        'error': None,
+        'duration': 0
+    }
+    
+    if not check_rclone_installed():
+        result['error'] = "rclone is not installed. Please install rclone to use S3 restore."
+        return result
+    
+    # Build S3 source path - 's3' remote is created via RCLONE_CONFIG_S3_* env vars
+    s3_source = f"s3:{s3_bucket}/{s3_path.rstrip('/')}/"
+    
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Format timestamp for rclone --s3-version-at (RFC3339 format: 2006-01-02T15:04:05Z)
+    version_at_str = target_timestamp.strftime('%Y-%m-%dT%H:%M:%SZ')
+    
+    # Use rclone copy with --s3-version-at to restore files to their versions at target time
+    cmd = [
+        'rclone',
+        'copy',
+        s3_source,
+        str(local_path),
+        '--s3-version-at', version_at_str,
+        '--transfers', '4',
+        '--checkers', '8',
+        '-v'
+    ]
+    
+    if timeout:
+        cmd.extend(['--timeout', f'{timeout}s'])
+    
+    logger.info(f"Restoring contentstore from S3 to timestamp {version_at_str}: {s3_source} -> {local_path}")
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        process = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        
+        duration = time.time() - start_time
+        result['duration'] = duration
+        
+        if process.returncode == 0:
+            result['success'] = True
+        else:
+            error_msg = process.stderr if process.stderr else process.stdout
+            result['error'] = f"rclone restore failed with exit code {process.returncode}: {error_msg[:500]}"
+            logger.error(result['error'])
+    
+    except subprocess.TimeoutExpired:
+        duration = time.time() - start_time
+        result['duration'] = duration
+        result['error'] = f"rclone restore timed out after {timeout} seconds"
+        logger.error(result['error'])
+    
+    except Exception as e:
+        duration = time.time() - start_time
+        result['duration'] = duration
+        result['error'] = f"Unexpected error during S3 restore: {str(e)}"
+        logger.error(result['error'])
+    
+    return result
+
+
 def download_from_s3(
     s3_bucket: str,
     s3_path: str,

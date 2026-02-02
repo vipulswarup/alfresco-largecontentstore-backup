@@ -773,6 +773,74 @@ class AlfrescoRestore:
             
             return False
     
+    def restore_contentstore_pitr(self, timestamp: str) -> bool:
+        """
+        Restore contentstore using S3 versioning to match PostgreSQL backup timestamp.
+        
+        This enables point-in-time recovery by restoring files to their versions
+        at the target timestamp, including files that were deleted after that time.
+        
+        Args:
+            timestamp: PostgreSQL backup timestamp (YYYY-MM-DD_HH-MM-SS format)
+        
+        Returns:
+            True if restore succeeded, False otherwise
+        """
+        if not self.config.s3_enabled:
+            self.logger.error("PITR contentstore restore requires S3 backups with versioning enabled")
+            return False
+        
+        if not self.config.contentstore_dir:
+            self.logger.error("Contentstore directory not configured")
+            return False
+        
+        self.logger.info(f"Restoring contentstore to match PostgreSQL backup timestamp: {timestamp}")
+        
+        try:
+            from alfresco_backup.utils.s3_utils import restore_contentstore_from_s3_version
+            
+            # Parse timestamp and convert to datetime
+            target_datetime = datetime.strptime(timestamp, '%Y-%m-%d_%H-%M-%S')
+            
+            # Restore contentstore using S3 versioning
+            self.logger.info("Restoring contentstore files to their versions at target timestamp...")
+            self.logger.info("This will restore files that were deleted after the backup timestamp.")
+            
+            restore_result = restore_contentstore_from_s3_version(
+                self.config.s3_bucket,
+                "alfresco-backups/contentstore/",
+                self.config.contentstore_dir,
+                self.config.s3_access_key_id,
+                self.config.s3_secret_access_key,
+                self.config.s3_region,
+                target_datetime,
+                timeout=86400  # 24 hours timeout
+            )
+            
+            if not restore_result['success']:
+                self.logger.error(f"Failed to restore contentstore from S3: {restore_result['error']}")
+                return False
+            
+            self.logger.info(f"Contentstore restored successfully ({restore_result['duration']:.1f}s)")
+            
+            # Set ownership
+            self.logger.info(f"Setting ownership to {self.config.alfresco_user}...")
+            subprocess.run(
+                ['sudo', 'chown', '-R', f'{self.config.alfresco_user}:{self.config.alfresco_user}', 
+                 str(self.config.contentstore_dir)], 
+                check=True
+            )
+            
+            self.logger.info("Contentstore PITR restore completed successfully")
+            return True
+            
+        except ValueError as e:
+            self.logger.error(f"Invalid timestamp format: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Contentstore PITR restore failed: {e}")
+            return False
+    
     def configure_pitr(self, target_time: Optional[str] = None) -> bool:
         """Configure PostgreSQL for point-in-time recovery."""
         if not self.config.postgres_data_dir:
@@ -913,6 +981,17 @@ def get_config() -> RestoreConfig:
     """Load restore configuration from .env file or interactively collect from user."""
     config = RestoreConfig()
     
+    # Track what was loaded from .env to avoid re-prompting
+    env_loaded = {
+        'backup_dir': False,
+        'alf_base_dir': False,
+        'alfresco_user': False,
+        's3_bucket': False,
+        's3_region': False,
+        's3_access_key_id': False,
+        's3_secret_access_key': False
+    }
+    
     # Try to load from .env file first
     try:
         from dotenv import load_dotenv
@@ -923,30 +1002,49 @@ def get_config() -> RestoreConfig:
         alfresco_user = os.getenv('ALFRESCO_USER')
         s3_bucket = os.getenv('S3_BUCKET')
         
+        if backup_dir:
+            env_loaded['backup_dir'] = True
+        if alf_base_dir:
+            env_loaded['alf_base_dir'] = True
+        if alfresco_user:
+            env_loaded['alfresco_user'] = True
+        
         if s3_bucket:
             config.s3_enabled = True
             config.s3_bucket = s3_bucket
+            env_loaded['s3_bucket'] = True
             config.s3_region = os.getenv('S3_REGION', 'us-east-1')
+            if os.getenv('S3_REGION'):
+                env_loaded['s3_region'] = True
             config.s3_access_key_id = os.getenv('AWS_ACCESS_KEY_ID', '')
+            if os.getenv('AWS_ACCESS_KEY_ID'):
+                env_loaded['s3_access_key_id'] = True
             config.s3_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY', '')
+            if os.getenv('AWS_SECRET_ACCESS_KEY'):
+                env_loaded['s3_secret_access_key'] = True
         
-        if backup_dir and alf_base_dir:
-            if not config.s3_enabled:
-                if Path(backup_dir).exists() and Path(alf_base_dir).exists():
-                    config.backup_dir = backup_dir
+        # Check if we have enough configuration to proceed
+        # For S3 mode: need alf_base_dir and S3 credentials
+        # For local mode: need backup_dir and alf_base_dir
+        if config.s3_enabled:
+            if alf_base_dir and Path(alf_base_dir).exists():
+                if config.s3_bucket and config.s3_access_key_id and config.s3_secret_access_key:
                     config.alf_base_dir = Path(alf_base_dir)
                     config.alfresco_user = alfresco_user or config.alfresco_user
                     config.restore_log_dir = str(Path.cwd())
-                    print("\nConfiguration loaded from .env file (local mode)")
+                    print("\nConfiguration loaded from .env file (S3 mode)")
                     return config
-            elif Path(alf_base_dir).exists():
+        elif backup_dir and alf_base_dir:
+            if Path(backup_dir).exists() and Path(alf_base_dir).exists():
+                config.backup_dir = backup_dir
                 config.alf_base_dir = Path(alf_base_dir)
                 config.alfresco_user = alfresco_user or config.alfresco_user
                 config.restore_log_dir = str(Path.cwd())
-                print("\nConfiguration loaded from .env file (S3 mode)")
+                print("\nConfiguration loaded from .env file (local mode)")
                 return config
         
-        if config.s3_enabled or (backup_dir and alf_base_dir):
+        # If we get here, some configuration is missing
+        if config.s3_enabled or backup_dir or s3_bucket or alf_base_dir:
             print("\nWarning: .env file found but some configuration is invalid, prompting for missing values...")
     except ImportError:
         pass  # dotenv not available, continue with interactive
@@ -990,18 +1088,33 @@ def get_config() -> RestoreConfig:
             config.s3_access_key_id = ask_question("AWS Access Key ID (AWS_ACCESS_KEY_ID)")
         if not config.s3_secret_access_key:
             config.s3_secret_access_key = ask_question("AWS Secret Access Key (AWS_SECRET_ACCESS_KEY)")
+        # Skip BACKUP_DIR prompt when S3 is enabled
     
-    while True:
-        alf_base = ask_question("Alfresco base directory (ALF_BASE_DIR)")
-        alf_base_path = Path(alf_base)
-        if alf_base_path.exists():
-            config.alf_base_dir = alf_base_path
-            break
-        print(f"Error: Directory does not exist: {alf_base}\n")
+    # Only prompt for alf_base_dir if not already set
+    if not config.alf_base_dir:
+        while True:
+            alf_base = ask_question("Alfresco base directory (ALF_BASE_DIR)")
+            alf_base_path = Path(alf_base)
+            if alf_base_path.exists():
+                config.alf_base_dir = alf_base_path
+                break
+            print(f"Error: Directory does not exist: {alf_base}\n")
     
-    config.alfresco_user = ask_question("Alfresco username", config.alfresco_user)
-    log_dir = ask_question("Log file directory", str(Path.cwd()))
-    config.restore_log_dir = log_dir
+    # Only prompt for alfresco_user if not already set (check if it's still the default)
+    default_user = os.environ.get('USER', os.environ.get('USERNAME', 'alfresco'))
+    if not config.alfresco_user or config.alfresco_user == default_user:
+        # Check if it was set from .env
+        env_user = os.getenv('ALFRESCO_USER')
+        if env_user and config.alfresco_user == env_user:
+            # Already set from .env, don't prompt
+            pass
+        else:
+            config.alfresco_user = ask_question("Alfresco username", config.alfresco_user)
+    
+    # Only prompt for log_dir if not already set
+    if not config.restore_log_dir:
+        log_dir = ask_question("Log file directory", str(Path.cwd()))
+        config.restore_log_dir = log_dir
     
     return config
 
@@ -1179,14 +1292,123 @@ def main():
         
         elif restore_mode == 2:
             logger.section("Point-in-Time Recovery")
-            logger.error("Point-in-Time Recovery (PITR) is not supported with SQL dump backups.")
-            logger.error("PITR requires WAL (Write-Ahead Log) archiving, which is not enabled.")
+            
+            # PITR requires S3 backups with versioning enabled
+            if not config.s3_enabled:
+                logger.error("Point-in-Time Recovery (PITR) requires S3 backups with versioning enabled.")
+                logger.error("PITR is not available for local backups.")
+                logger.info("")
+                logger.info("To use PITR, configure S3 backups with versioning enabled.")
+                logger.info("For local backups, use option 1 (Full system restore) instead.")
+                sys.exit(1)
+            
+            logger.info("Point-in-Time Recovery (PITR) mode")
+            logger.info("This will restore PostgreSQL from a selected backup and restore contentstore")
+            logger.info("to match that timestamp using S3 versioning (including deleted files).")
             logger.info("")
-            logger.info("To restore from a specific backup, use option 1 (Full system restore)")
-            logger.info("and select the backup closest to your desired recovery point.")
+            
+            # List PostgreSQL backups
+            pg_backups = restore.list_postgres_backups()
+            if not pg_backups:
+                logger.error("No PostgreSQL backups found in S3")
+                sys.exit(1)
+            
+            # Show available backups with timestamps
+            logger.info("Available PostgreSQL backups:")
+            logger.info("-" * 80)
+            for i, backup in enumerate(pg_backups[:20], 1):
+                logger.info(f"  {i}. {backup}")
+            if len(pg_backups) > 20:
+                logger.info(f"  ... and {len(pg_backups) - 20} older backups")
+            
+            # User selects backup
+            pg_timestamp = select_backup(pg_backups, "PostgreSQL")
+            if not pg_timestamp:
+                logger.error("No PostgreSQL backup selected")
+                sys.exit(1)
+            
+            logger.info(f"Selected PostgreSQL backup: {pg_timestamp}")
+            
+            # Validate backup
+            logger.section("Validating Backup")
+            if not restore.validate_postgres_backup(pg_timestamp):
+                logger.error("PostgreSQL backup validation failed")
+                sys.exit(1)
+            
+            # Confirmation
+            logger.section("Restore Confirmation")
+            logger.info("About to restore:")
+            logger.info(f"  PostgreSQL: {pg_timestamp}")
+            logger.info(f"  Contentstore: Will be restored to match PostgreSQL backup timestamp using S3 versioning")
             logger.info("")
-            logger.info("Note: SQL dump backups provide snapshot recovery only, not point-in-time recovery.")
-            sys.exit(1)
+            logger.warning("WARNING: This will replace current data!")
+            logger.warning("Current data will be backed up automatically.")
+            logger.warning("PostgreSQL must be running for database restore.")
+            logger.info("")
+            
+            confirm = input("Type 'RESTORE' to confirm: ").strip()
+            if confirm != 'RESTORE':
+                logger.info("Restore cancelled by user")
+                sys.exit(0)
+            
+            # Step 1: Start all Alfresco services (including PostgreSQL)
+            logger.section("Starting Alfresco Services")
+            if not restore.start_alfresco_full():
+                logger.error("Failed to start Alfresco services")
+                sys.exit(1)
+            
+            # Step 2: Wait 2 minutes for services to fully start
+            logger.section("Waiting for Services to Start")
+            logger.info("Waiting 2 minutes for Alfresco services to fully initialize...")
+            import time
+            time.sleep(120)  # 2 minutes
+            logger.info("Wait completed")
+            
+            # Step 3: Stop only Tomcat (PostgreSQL must remain running)
+            logger.section("Stopping Tomcat")
+            if not restore.stop_tomcat_only():
+                logger.error("Failed to stop Tomcat")
+                sys.exit(1)
+            
+            # Step 4: Verify PostgreSQL is running
+            logger.section("Verifying PostgreSQL")
+            if not restore.verify_postgresql_running():
+                logger.error("PostgreSQL is not running or not accepting connections")
+                logger.error("Cannot proceed with database restore")
+                sys.exit(1)
+            
+            # Step 5: Backup current data
+            logger.section("Backing Up Current Data")
+            success, backup_timestamp = restore.backup_current_data()
+            if not success:
+                logger.error("Failed to backup current data")
+                sys.exit(1)
+            logger.info(f"Current data backed up with timestamp: {backup_timestamp}")
+            
+            # Step 6: Restore PostgreSQL
+            logger.section("Restoring PostgreSQL")
+            if not restore.restore_postgres(pg_timestamp):
+                logger.error("PostgreSQL restore failed")
+                sys.exit(1)
+            
+            # Step 7: Restore Contentstore using PITR (S3 versioning)
+            logger.section("Restoring Contentstore (PITR)")
+            logger.info("Restoring contentstore to match PostgreSQL backup timestamp using S3 versioning...")
+            if not restore.restore_contentstore_pitr(pg_timestamp):
+                logger.error("Contentstore PITR restore failed")
+                sys.exit(1)
+            
+            # Step 8: Start Tomcat (PostgreSQL is already running)
+            logger.section("Starting Tomcat")
+            if not restore.start_tomcat_only():
+                logger.error("Failed to start Tomcat")
+                logger.info("Tomcat may need manual intervention to start")
+            
+            logger.section("PITR Restore Complete")
+            logger.info("Point-in-time recovery completed successfully!")
+            logger.info(f"PostgreSQL restored from backup: {pg_timestamp}")
+            logger.info(f"Contentstore restored to match PostgreSQL backup timestamp using S3 versioning")
+            logger.info(f"Backup log: {log_file}")
         
         elif restore_mode == 3:
             logger.section("PostgreSQL Only Restore")
