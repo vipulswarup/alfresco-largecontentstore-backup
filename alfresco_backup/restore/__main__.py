@@ -245,8 +245,26 @@ class AlfrescoRestore:
         try:
             # Try to connect to PostgreSQL using psql
             import os
-            from dotenv import load_dotenv
-            load_dotenv()
+            
+            # Try to load .env file
+            try:
+                from dotenv import load_dotenv
+                load_dotenv()
+            except ImportError:
+                # dotenv not available, try to read .env manually
+                try:
+                    env_file = Path('.env')
+                    if env_file.exists():
+                        with open(env_file, 'r') as f:
+                            for line in f:
+                                line = line.strip()
+                                if line and not line.startswith('#') and '=' in line:
+                                    key, value = line.split('=', 1)
+                                    key = key.strip()
+                                    value = value.strip().strip('"').strip("'")
+                                    os.environ[key] = value
+                except Exception:
+                    pass  # Continue with environment variables as-is
             
             pg_host = os.getenv('PGHOST', 'localhost')
             pg_port = os.getenv('PGPORT', '5432')
