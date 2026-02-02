@@ -132,9 +132,11 @@ def sync_to_s3(
             # We need the first number (actual transferred amount) before the "/"
             output = process.stdout + process.stderr
             last_transferred_value = None
+            transferred_lines = []
             
             for line in output.split('\n'):
                 if 'Transferred:' in line:
+                    transferred_lines.append(line)
                     try:
                         # Extract the part after "Transferred:"
                         transferred_part = line.split('Transferred:')[1].strip()
@@ -153,14 +155,19 @@ def sync_to_s3(
                         # Extract numeric part and unit
                         # Match formats like "1.234 GiB", "123.456 k", "5.678 MB", etc.
                         # Pattern: number followed by optional space and unit (K/M/G/T with optional i and/or B)
+                        # Also handle cases where there's no space: "1.234GiB"
                         match = re.match(r'([\d.]+)\s*([KMGTkmgt][iI]?[bB]?)', amount_str)
+                        if not match:
+                            # Try without space
+                            match = re.match(r'([\d.]+)([KMGTkmgt][iI]?[bB]?)', amount_str)
+                        
                         if match:
                             number = float(match.group(1))
                             unit = match.group(2).upper()
                             
                             # Determine if binary (i present) or decimal unit
                             is_binary = 'I' in unit
-                            base_unit = unit[0]  # K, M, G, or T
+                            base_unit = unit[0] if unit else ''
                             
                             # Convert to bytes based on unit
                             if base_unit == 'K':
@@ -180,6 +187,7 @@ def sync_to_s3(
                                 bytes_value = number
                             
                             last_transferred_value = int(bytes_value)
+                            logger.debug(f"Parsed '{amount_str}' as {last_transferred_value} bytes")
                     except (ValueError, IndexError, AttributeError) as e:
                         logger.debug(f"Could not parse Transferred line: {line[:100]}, error: {e}")
                         pass
@@ -190,9 +198,16 @@ def sync_to_s3(
                 logger.info(f"Parsed bytes_transferred from rclone output: {last_transferred_value / (1024*1024):.2f} MB")
             else:
                 logger.warning("Could not parse bytes_transferred from rclone output. Output may be in unexpected format.")
-                # Log a sample of the output for debugging (last 1000 chars)
-                output_sample = (process.stdout + process.stderr)[-1000:] if (process.stdout + process.stderr) else "No output"
-                logger.debug(f"Last 1000 chars of rclone output: {output_sample}")
+                # Log transferred lines for debugging
+                if transferred_lines:
+                    logger.info(f"Found {len(transferred_lines)} 'Transferred:' lines. Sample (last 3):")
+                    for line in transferred_lines[-3:]:
+                        logger.info(f"  {line[:200]}")
+                else:
+                    logger.info("No 'Transferred:' lines found in rclone output.")
+                    # Log a sample of the output for debugging (last 1000 chars)
+                    output_sample = (process.stdout + process.stderr)[-1000:] if (process.stdout + process.stderr) else "No output"
+                    logger.info(f"Last 1000 chars of rclone output: {output_sample}")
         
         else:
             error_msg = process.stderr if process.stderr else process.stdout
