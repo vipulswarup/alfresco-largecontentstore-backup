@@ -147,6 +147,41 @@ class AlfrescoRestore:
         """Start all Alfresco services (including PostgreSQL)."""
         self.logger.info("Starting all Alfresco services...")
         
+        # Check if PostgreSQL data directory exists, initialize if not
+        if self.config.postgres_data_dir and not self.config.postgres_data_dir.exists():
+            self.logger.warning(f"PostgreSQL data directory does not exist: {self.config.postgres_data_dir}")
+            self.logger.info("Initializing PostgreSQL data directory...")
+            
+            # Find initdb binary
+            alf_base_path = Path(self.config.alf_base_dir) if isinstance(self.config.alf_base_dir, str) else self.config.alf_base_dir
+            embedded_initdb = alf_base_path / 'postgresql' / 'bin' / 'initdb'
+            if embedded_initdb.exists():
+                initdb_cmd = str(embedded_initdb)
+            else:
+                initdb_cmd = 'initdb'
+            
+            try:
+                # Create parent directory if needed
+                self.config.postgres_data_dir.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Initialize PostgreSQL
+                result = subprocess.run(
+                    ['sudo', '-u', self.config.alfresco_user, initdb_cmd,
+                     '-D', str(self.config.postgres_data_dir)],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                
+                if result.returncode == 0:
+                    self.logger.info("PostgreSQL data directory initialized successfully")
+                else:
+                    self.logger.error(f"Failed to initialize PostgreSQL: {result.stderr}")
+                    return False
+            except Exception as e:
+                self.logger.error(f"Error initializing PostgreSQL: {e}")
+                return False
+        
         try:
             result = subprocess.run(
                 ['sudo', '-u', self.config.alfresco_user, 
