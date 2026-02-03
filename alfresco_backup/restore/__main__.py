@@ -319,7 +319,7 @@ class AlfrescoRestore:
             if pg_password:
                 env['PGPASSWORD'] = pg_password
             
-            # First try connecting as the configured user
+            # Try connecting as the configured user
             result = subprocess.run(
                 [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-c', 'SELECT 1;'],
                 env=env,
@@ -331,84 +331,15 @@ class AlfrescoRestore:
             if result.returncode == 0:
                 self.logger.info("PostgreSQL is running and accepting connections")
                 return True
-            
-            # If connection failed, check if it's because the user doesn't exist
-            if 'does not exist' in result.stderr or 'role' in result.stderr.lower():
-                self.logger.warning(f"User '{pg_user}' does not exist. Attempting to create user and database...")
-                
-                # Try connecting as postgres superuser (default user after initdb)
-                pg_superuser = os.getenv('PGSUPERUSER', 'postgres')
-                pg_superuser_password = os.getenv('PGSUPERUSER_PASSWORD', '')
-                
-                # For fresh initdb, postgres user might not have a password set
-                # Try connecting without password first
-                superuser_env = os.environ.copy()
-                if pg_superuser_password:
-                    superuser_env['PGPASSWORD'] = pg_superuser_password
-                else:
-                    # Remove PGPASSWORD if set, as postgres user might not have one
-                    superuser_env.pop('PGPASSWORD', None)
-                
-                # Try to connect as postgres user
-                superuser_result = subprocess.run(
-                    [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_superuser, '-d', 'postgres', '-c', 'SELECT 1;'],
-                    env=superuser_env,
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                
-                if superuser_result.returncode == 0:
-                    # Create the alfresco user and database
-                    self.logger.info(f"Connected as '{pg_superuser}'. Creating user '{pg_user}' and database...")
-                    
-                    # Create user
-                    create_user_sql = f"CREATE USER {pg_user} WITH PASSWORD '{pg_password}';"
-                    create_user_result = subprocess.run(
-                        [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_superuser, '-d', 'postgres', '-c', create_user_sql],
-                        env=superuser_env,
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
-                    
-                    if create_user_result.returncode != 0 and 'already exists' not in create_user_result.stderr:
-                        self.logger.warning(f"Could not create user (may already exist): {create_user_result.stderr}")
-                    
-                    # Create database
-                    create_db_sql = f"CREATE DATABASE {pg_database} OWNER {pg_user};"
-                    create_db_result = subprocess.run(
-                        [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_superuser, '-d', 'postgres', '-c', create_db_sql],
-                        env=superuser_env,
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
-                    
-                    if create_db_result.returncode != 0 and 'already exists' not in create_db_result.stderr:
-                        self.logger.warning(f"Could not create database (may already exist): {create_db_result.stderr}")
-                    
-                    # Now try connecting as the alfresco user again
-                    result = subprocess.run(
-                        [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-c', 'SELECT 1;'],
-                        env=env,
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
-                    
-                    if result.returncode == 0:
-                        self.logger.info("PostgreSQL is running and accepting connections")
-                        return True
-                    else:
-                        self.logger.error(f"PostgreSQL connection failed after creating user: {result.stderr}")
-                        return False
-                else:
-                    self.logger.error(f"Could not connect as '{pg_superuser}' to create user: {superuser_result.stderr}")
-                    self.logger.error(f"Original connection error: {result.stderr}")
-                    return False
             else:
-                self.logger.error(f"PostgreSQL connection failed: {result.stderr}")
+                # Check if it's a user/role error
+                if 'does not exist' in result.stderr or 'role' in result.stderr.lower():
+                    self.logger.error(f"PostgreSQL user '{pg_user}' does not exist")
+                    self.logger.error("The 'alfresco' user is created during Alfresco installation and cannot be recreated.")
+                    self.logger.error("If the user was deleted, you must reinstall Alfresco.")
+                    self.logger.error(f"Connection error: {result.stderr}")
+                else:
+                    self.logger.error(f"PostgreSQL connection failed: {result.stderr}")
                 return False
                 
         except Exception as e:

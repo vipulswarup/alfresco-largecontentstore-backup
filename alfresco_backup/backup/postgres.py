@@ -70,16 +70,21 @@ def backup_postgres(config):
     
     # Use pg_dump with gzip compression
     # pg_dump outputs to stdout, which we pipe to gzip
+    # IMPORTANT: These flags ensure we do NOT delete or modify PostgreSQL users/roles:
+    #   --no-owner: Does NOT include CREATE USER or DROP USER statements
+    #   --no-acl: Does NOT include GRANT/REVOKE statements for users
+    #   --clean: Only drops database objects (tables, schemas, etc.), NOT users/roles
+    # The 'alfresco' user is created during Alfresco installation and cannot be recreated.
     pg_dump_cmd_list = [
         pg_dump_cmd,
         '-h', config.pghost,
         '-p', config.pgport,
         '-U', config.pguser,
         '-d', config.pgdatabase,
-        '--clean',  # Include DROP statements
+        '--clean',  # Include DROP statements for database objects only
         '--if-exists',  # Use IF EXISTS for DROP statements
-        '--no-owner',  # Skip ownership commands
-        '--no-acl',  # Skip access privileges
+        '--no-owner',  # Skip ownership commands (does NOT include user/role statements)
+        '--no-acl',  # Skip access privileges (does NOT include user/role statements)
     ]
     
     # Run pg_dump first to temporary file to get uncompressed size
