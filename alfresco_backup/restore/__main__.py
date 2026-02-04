@@ -688,17 +688,31 @@ class AlfrescoRestore:
                 
                 self.logger.info(f"PostgreSQL backup downloaded successfully ({download_result['duration']:.1f}s)")
                 
-                # Verify the downloaded file exists and is actually a file (not a directory)
-                if not backup_file.exists():
+                # Verify the downloaded file exists
+                # rclone copyto may create a directory with the filename, then put the file inside
+                # Check if the path is a directory, and if so, look for the file inside
+                if backup_file.is_dir():
+                    # rclone created a directory - look for the file inside
+                    file_inside = backup_file / backup_file.name
+                    if file_inside.exists() and file_inside.is_file():
+                        self.logger.info(f"Found file inside directory: {file_inside}")
+                        backup_file = file_inside
+                    else:
+                        # Try to find any .sql.gz file inside
+                        sql_files = list(backup_file.glob('*.sql.gz'))
+                        if sql_files:
+                            self.logger.info(f"Found SQL file in directory: {sql_files[0]}")
+                            backup_file = sql_files[0]
+                        else:
+                            self.logger.error(f"Downloaded backup path is a directory but no file found inside: {backup_file}")
+                            self.logger.error("Contents:")
+                            for item in backup_file.iterdir():
+                                self.logger.error(f"  {item.name} ({'file' if item.is_file() else 'dir'})")
+                            return False
+                elif not backup_file.exists():
                     self.logger.error(f"Downloaded backup file does not exist: {backup_file}")
                     return False
-                
-                if backup_file.is_dir():
-                    self.logger.error(f"Downloaded backup path is a directory, not a file: {backup_file}")
-                    self.logger.error("This usually means rclone downloaded it incorrectly. Check S3 path.")
-                    return False
-                
-                if not backup_file.is_file():
+                elif not backup_file.is_file():
                     self.logger.error(f"Downloaded backup path is not a regular file: {backup_file}")
                     return False
                 

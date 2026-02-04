@@ -945,6 +945,12 @@ def download_from_s3(
     
     local_path.parent.mkdir(parents=True, exist_ok=True)
     
+    # Remove destination if it exists as a directory (rclone copyto may have created it previously)
+    if local_path.exists() and local_path.is_dir():
+        import shutil
+        logger.warning(f"Removing existing directory at download destination: {local_path}")
+        shutil.rmtree(local_path)
+    
     # Check if source path ends with a file extension (likely a single file)
     # For single files, use 'copyto' to ensure it's treated as a file, not a directory
     # For directories, use 'copy'
@@ -952,6 +958,7 @@ def download_from_s3(
     
     if is_single_file:
         # Use copyto for single files to ensure destination is a file, not a directory
+        # Note: If local_path doesn't exist, rclone copyto will create it as a file
         cmd = [
             'rclone',
             'copyto',
