@@ -183,6 +183,7 @@ class AlfrescoRestore:
                 return False
         
         try:
+            # Start services - don't fail on non-zero return code as services may still be starting
             result = subprocess.run(
                 ['sudo', '-u', self.config.alfresco_user, 
                  str(self.config.alfresco_script), 'start'],
@@ -191,20 +192,105 @@ class AlfrescoRestore:
                 timeout=300
             )
             
-            if result.returncode == 0:
-                self.logger.info("Alfresco services started successfully")
-                return True
-            else:
-                self.logger.warning(f"Start command output: {result.stdout}")
-                self.logger.warning(f"Start command error: {result.stderr}")
-                return False
+            # Log output but don't fail yet - services may still be starting
+            if result.stdout:
+                self.logger.info(f"Start command output: {result.stdout}")
+            if result.stderr:
+                self.logger.info(f"Start command error: {result.stderr}")
+            
+            # Wait and poll catalina.out for successful startup
+            self.logger.info("Waiting for Alfresco to start (checking catalina.out)...")
+            return self._wait_for_alfresco_startup(max_wait_minutes=4)
                 
         except subprocess.TimeoutExpired:
-            self.logger.error("Alfresco start timed out")
-            return False
+            self.logger.error("Alfresco start command timed out")
+            # Still try to wait for startup
+            self.logger.info("Waiting for Alfresco to start (checking catalina.out)...")
+            return self._wait_for_alfresco_startup(max_wait_minutes=4)
         except Exception as e:
             self.logger.error(f"Error starting Alfresco: {e}")
             return False
+    
+    def _wait_for_alfresco_startup(self, max_wait_minutes: int = 4) -> bool:
+        """
+        Wait for Alfresco to start by polling catalina.out for 'Server startup' message.
+        
+        Args:
+            max_wait_minutes: Maximum time to wait in minutes (default: 4)
+        
+        Returns:
+            True if startup detected, False if timeout
+        """
+        import time
+        
+        alf_base_path = Path(self.config.alf_base_dir) if isinstance(self.config.alf_base_dir, str) else self.config.alf_base_dir
+        catalina_log = alf_base_path / 'tomcat' / 'logs' / 'catalina.out'
+        
+        if not catalina_log.exists():
+            self.logger.warning(f"catalina.out not found at {catalina_log}, waiting {max_wait_minutes} minutes...")
+            time.sleep(max_wait_minutes * 60)
+            return True  # Assume success if we can't check
+        
+        max_wait_seconds = max_wait_minutes * 60
+        check_interval = 5  # Check every 5 seconds
+        elapsed = 0
+        
+        self.logger.info(f"Polling {catalina_log} for 'Server startup' message (max {max_wait_minutes} minutes)...")
+        
+        while elapsed < max_wait_seconds:
+            try:
+                # Read the last few KB of the log file
+                with open(catalina_log, 'rb') as f:
+                    # Seek to end and read last 50KB
+                    f.seek(0, 2)  # Seek to end
+                    file_size = f.tell()
+                    read_size = min(50000, file_size)
+                    f.seek(max(0, file_size - read_size))
+                    log_tail = f.read().decode('utf-8', errors='ignore')
+                
+                # Check for successful startup message
+                if 'Server startup in' in log_tail and 'ms' in log_tail:
+                    # Extract the startup line
+                    for line in log_tail.split('\n'):
+                        if 'Server startup in' in line and 'ms' in line:
+                            self.logger.info(f"Alfresco started successfully: {line.strip()}")
+                            return True
+                
+                # Check for fatal errors that indicate startup failure
+                if 'SEVERE' in log_tail or 'FATAL' in log_tail:
+                    # Check if it's a recent error (in last 30 seconds of log)
+                    recent_errors = [line for line in log_tail.split('\n')[-100:] 
+                                   if 'SEVERE' in line or 'FATAL' in line]
+                    if recent_errors:
+                        self.logger.warning(f"Found errors in catalina.out: {recent_errors[-1]}")
+                
+            except Exception as e:
+                self.logger.debug(f"Error reading catalina.out: {e}")
+            
+            time.sleep(check_interval)
+            elapsed += check_interval
+            
+            if elapsed % 30 == 0:  # Log progress every 30 seconds
+                self.logger.info(f"Still waiting... ({elapsed // 60}m {elapsed % 60}s elapsed)")
+        
+        # Timeout - check if services are at least running
+        self.logger.warning(f"Timeout waiting for 'Server startup' message after {max_wait_minutes} minutes")
+        self.logger.info("Checking if Tomcat process is running...")
+        
+        try:
+            result = subprocess.run(
+                ['pgrep', '-f', 'java.*tomcat|java.*alfresco.*tomcat'],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                self.logger.info("Tomcat process is running - assuming startup successful")
+                return True
+        except Exception:
+            pass
+        
+        self.logger.error("Alfresco startup verification failed")
+        return False
     
     def stop_tomcat_only(self) -> bool:
         """Stop only Tomcat, leaving PostgreSQL running."""
