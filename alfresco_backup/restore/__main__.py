@@ -250,19 +250,49 @@ class AlfrescoRestore:
                 
                 # Check for successful startup message
                 if 'Server startup in' in log_tail and 'ms' in log_tail:
-                    # Extract the startup line
+                    # Check if startup actually succeeded - look for context startup failures
+                    startup_failed = False
+                    critical_errors = []
+                    
+                    # Check for critical errors that indicate startup failure
                     for line in log_tail.split('\n'):
-                        if 'Server startup in' in line and 'ms' in line:
-                            self.logger.info(f"Alfresco started successfully: {line.strip()}")
-                            return True
+                        # Check for context startup failures
+                        if 'Context [' in line and 'startup failed' in line.lower():
+                            startup_failed = True
+                            critical_errors.append(line.strip())
+                        # Check for content integrity errors
+                        if 'CONTENT INTEGRITY ERROR' in line or 'content not found in content store' in line.lower():
+                            startup_failed = True
+                            critical_errors.append(line.strip())
+                        # Check for AlfrescoRuntimeException related to content
+                        if 'AlfrescoRuntimeException' in line and ('content' in line.lower() or 'dir.root' in line.lower()):
+                            startup_failed = True
+                            critical_errors.append(line.strip())
+                    
+                    if startup_failed:
+                        self.logger.error("Alfresco startup failed due to critical errors:")
+                        for error in critical_errors[-3:]:  # Show last 3 critical errors
+                            self.logger.error(f"  {error}")
+                        self.logger.error("Server startup message found but context failed to start")
+                        # Continue waiting - maybe it will recover
+                    else:
+                        # Extract the startup line
+                        for line in log_tail.split('\n'):
+                            if 'Server startup in' in line and 'ms' in line:
+                                self.logger.info(f"Alfresco started successfully: {line.strip()}")
+                                return True
                 
                 # Check for fatal errors that indicate startup failure
                 if 'SEVERE' in log_tail or 'FATAL' in log_tail:
-                    # Check if it's a recent error (in last 30 seconds of log)
+                    # Check if it's a recent error (in last 100 lines of log)
                     recent_errors = [line for line in log_tail.split('\n')[-100:] 
-                                   if 'SEVERE' in line or 'FATAL' in line]
+                                   if ('SEVERE' in line or 'FATAL' in line) and 
+                                   ('startup failed' in line.lower() or 'CONTENT INTEGRITY ERROR' in line)]
                     if recent_errors:
-                        self.logger.warning(f"Found errors in catalina.out: {recent_errors[-1]}")
+                        # Only warn about non-critical errors (ThreadLocal warnings are common and not fatal)
+                        non_critical = [e for e in recent_errors if 'ThreadLocal' not in e and 'memory leak' not in e]
+                        if non_critical:
+                            self.logger.warning(f"Found critical errors in catalina.out: {non_critical[-1]}")
                 
             except Exception as e:
                 self.logger.debug(f"Error reading catalina.out: {e}")
@@ -939,11 +969,14 @@ class AlfrescoRestore:
                         self.logger.info(f"Found {alf_table_count} Alfresco tables (alf_*)")
                         
                         if alf_table_count == 0:
-                            self.logger.warning("WARNING: No Alfresco tables found! Restore may have failed or restored to wrong database.")
-                            self.logger.warning(f"Please verify that database '{pg_database}' is correct.")
-                        elif alf_table_count < 50:
-                            self.logger.warning(f"WARNING: Only {alf_table_count} Alfresco tables found. Expected 50+ tables.")
-                            self.logger.warning("Restore may be incomplete.")
+                            self.logger.error("ERROR: No Alfresco tables found! Restore may have failed or restored to wrong database.")
+                            self.logger.error(f"Please verify that database '{pg_database}' is correct.")
+                            return False
+                        elif alf_table_count < 20:
+                            self.logger.warning(f"WARNING: Only {alf_table_count} Alfresco tables found. Expected 20+ tables.")
+                            self.logger.warning("Restore may be incomplete - verify content is accessible after startup.")
+                        else:
+                            self.logger.info(f"Database restore verified: {alf_table_count} Alfresco tables found (normal range: 20-100+)")
                     except ValueError:
                         self.logger.warning(f"Could not parse Alfresco table count: {alf_table_count_str}")
                 else:
