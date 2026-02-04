@@ -757,11 +757,45 @@ class AlfrescoRestore:
             pg_port = os.getenv('PGPORT', '5432')
             pg_user = os.getenv('PGUSER', 'alfresco')
             pg_password = os.getenv('PGPASSWORD')
-            pg_database = os.getenv('PGDATABASE', 'postgres')
+            # Alfresco typically uses 'alfresco' database, not 'postgres'
+            # But check .env first, then try to detect from alfresco-global.properties
+            pg_database = os.getenv('PGDATABASE')
+            if not pg_database:
+                # Try to detect from alfresco-global.properties
+                alf_base_path = Path(self.config.alf_base_dir) if isinstance(self.config.alf_base_dir, str) else self.config.alf_base_dir
+                props_file = alf_base_path / 'tomcat' / 'shared' / 'classes' / 'alfresco-global.properties'
+                if props_file.exists():
+                    try:
+                        with open(props_file, 'r') as f:
+                            for line in f:
+                                if 'db.name' in line and '=' in line:
+                                    db_name = line.split('=', 1)[1].strip().strip('"').strip("'")
+                                    if db_name:
+                                        pg_database = db_name
+                                        self.logger.info(f"Detected database name from alfresco-global.properties: {pg_database}")
+                                        break
+                                elif 'db.url' in line and '=' in line:
+                                    # Extract database name from JDBC URL
+                                    import re
+                                    url = line.split('=', 1)[1].strip().strip('"').strip("'")
+                                    match = re.search(r'jdbc:postgresql://[^/]+/([^?]+)', url)
+                                    if match:
+                                        pg_database = match.group(1)
+                                        self.logger.info(f"Detected database name from db.url: {pg_database}")
+                                        break
+                    except Exception as e:
+                        self.logger.debug(f"Could not parse alfresco-global.properties: {e}")
+            
+            # Default to 'alfresco' if still not set (most common Alfresco database name)
+            if not pg_database:
+                pg_database = 'alfresco'
+                self.logger.info(f"Using default database name: {pg_database}")
             
             if not pg_password:
                 self.logger.error("PGPASSWORD not found in .env file")
                 return False
+            
+            self.logger.info(f"Restoring to database: {pg_database}")
         except Exception as e:
             self.logger.error(f"Failed to load database configuration: {e}")
             return False
@@ -866,6 +900,43 @@ class AlfrescoRestore:
                 
                 # For other gunzip errors, log warning but don't fail if psql succeeded
                 # (psql may have already read all the data before gunzip failed)
+            
+            # Verify restore succeeded by checking database content
+            self.logger.info("Verifying database restore...")
+            verify_result = subprocess.run(
+                [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-c', 
+                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if verify_result.returncode == 0:
+                table_count = verify_result.stdout.strip().split('\n')[-1].strip()
+                self.logger.info(f"Database verification: Found {table_count} tables in database")
+                
+                # Check for Alfresco-specific tables
+                alfresco_check = subprocess.run(
+                    [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-c',
+                     "SELECT COUNT(*) FROM information_schema.tables WHERE table_name LIKE 'alf_%';"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                
+                if alfresco_check.returncode == 0:
+                    alf_table_count = alfresco_check.stdout.strip().split('\n')[-1].strip()
+                    self.logger.info(f"Found {alf_table_count} Alfresco tables (alf_*)")
+                    
+                    if int(alf_table_count) == 0:
+                        self.logger.warning("WARNING: No Alfresco tables found! Restore may have failed or restored to wrong database.")
+                        self.logger.warning(f"Please verify that database '{pg_database}' is correct.")
+                else:
+                    self.logger.warning("Could not verify Alfresco tables")
+            else:
+                self.logger.warning(f"Could not verify database restore: {verify_result.stderr}")
             
             self.logger.info("PostgreSQL restore completed successfully")
             
@@ -1144,28 +1215,55 @@ recovery_target_timeline = 'latest'
         """Start only Tomcat (PostgreSQL should already be running)."""
         self.logger.info("Starting Tomcat only (PostgreSQL should already be running)...")
         
+        alf_base_path = Path(self.config.alf_base_dir) if isinstance(self.config.alf_base_dir, str) else self.config.alf_base_dir
+        tomcat_script = alf_base_path / 'tomcat' / 'scripts' / 'ctl.sh'
+        
         try:
-            # Try to start tomcat using alfresco.sh start-tomcat or similar
-            result = subprocess.run(
-                ['sudo', '-u', self.config.alfresco_user, 
-                 str(self.config.alfresco_script), 'start-tomcat'],
-                capture_output=True,
-                text=True,
-                timeout=600
-            )
-            
-            if result.returncode == 0:
-                self.logger.info("Tomcat started successfully")
-                self.logger.info("Monitor startup with: tail -f {}/tomcat/logs/catalina.out".format(self.config.alf_base_dir))
-                return True
+            # Try to start tomcat directly using tomcat/scripts/ctl.sh start
+            if tomcat_script.exists():
+                self.logger.info(f"Starting Tomcat using {tomcat_script}")
+                result = subprocess.run(
+                    ['sudo', '-u', self.config.alfresco_user, 
+                     str(tomcat_script), 'start'],
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                
+                # Log output but don't fail yet - Tomcat may still be starting
+                if result.stdout:
+                    self.logger.info(f"Tomcat start command output: {result.stdout}")
+                if result.stderr:
+                    self.logger.info(f"Tomcat start command error: {result.stderr}")
+                
+                # Wait and poll catalina.out for successful startup
+                self.logger.info("Waiting for Tomcat to start (checking catalina.out)...")
+                return self._wait_for_alfresco_startup(max_wait_minutes=4)
             else:
-                # Fallback: use regular start (it should skip PostgreSQL if already running)
-                self.logger.info("Attempting to start via alfresco.sh start (PostgreSQL should remain running)...")
-                return self.start_alfresco()
+                # Fallback: try alfresco.sh start-tomcat
+                self.logger.info("Tomcat script not found, trying alfresco.sh start-tomcat...")
+                result = subprocess.run(
+                    ['sudo', '-u', self.config.alfresco_user, 
+                     str(self.config.alfresco_script), 'start-tomcat'],
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                
+                if result.stdout:
+                    self.logger.info(f"Start command output: {result.stdout}")
+                if result.stderr:
+                    self.logger.info(f"Start command error: {result.stderr}")
+                
+                # Wait and poll catalina.out
+                self.logger.info("Waiting for Tomcat to start (checking catalina.out)...")
+                return self._wait_for_alfresco_startup(max_wait_minutes=4)
                 
         except subprocess.TimeoutExpired:
-            self.logger.error("Tomcat start timed out")
-            return False
+            self.logger.warning("Tomcat start command timed out, but may still be starting...")
+            # Still try to wait for startup
+            self.logger.info("Waiting for Tomcat to start (checking catalina.out)...")
+            return self._wait_for_alfresco_startup(max_wait_minutes=4)
         except Exception as e:
             self.logger.error(f"Error starting Tomcat: {e}")
             return False
@@ -1615,6 +1713,12 @@ def main():
             if not restore.start_tomcat_only():
                 logger.error("Failed to start Tomcat")
                 logger.info("Tomcat may need manual intervention to start")
+                logger.info("Check logs: tail -f {}/tomcat/logs/catalina.out".format(config.alf_base_dir))
+            else:
+                logger.info("Tomcat started successfully")
+                logger.warning("NOTE: After restore, Alfresco may need to reindex content.")
+                logger.warning("Check Admin Tools > Node Browser to verify content is accessible.")
+                logger.warning("If documents don't appear, trigger a reindex from Admin Tools > Search Management.")
             
             logger.section("Restore Complete")
             logger.info("Full system restore completed successfully!")
