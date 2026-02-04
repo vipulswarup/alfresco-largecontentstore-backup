@@ -945,13 +945,29 @@ def download_from_s3(
     
     local_path.parent.mkdir(parents=True, exist_ok=True)
     
-    cmd = [
-        'rclone',
-        'copy',
-        s3_source,
-        str(local_path),
-        '-v'
-    ]
+    # Check if source path ends with a file extension (likely a single file)
+    # For single files, use 'copyto' to ensure it's treated as a file, not a directory
+    # For directories, use 'copy'
+    is_single_file = '.' in Path(s3_path).name and not s3_path.endswith('/')
+    
+    if is_single_file:
+        # Use copyto for single files to ensure destination is a file, not a directory
+        cmd = [
+            'rclone',
+            'copyto',
+            s3_source,
+            str(local_path),
+            '-v'
+        ]
+    else:
+        # Use copy for directories
+        cmd = [
+            'rclone',
+            'copy',
+            s3_source,
+            str(local_path),
+            '-v'
+        ]
     
     # If version ID is specified, we'd need to use --s3-version-at, but that requires a timestamp
     # For now, we'll download the latest version
@@ -960,7 +976,7 @@ def download_from_s3(
     if timeout:
         cmd.extend(['--timeout', f'{timeout}s'])
     
-    logger.info(f"Downloading from S3: {s3_source} -> {local_path}")
+    logger.info(f"Downloading from S3: {s3_source} -> {local_path} ({'file' if is_single_file else 'directory'})")
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)

@@ -601,6 +601,21 @@ class AlfrescoRestore:
                     return False
                 
                 self.logger.info(f"PostgreSQL backup downloaded successfully ({download_result['duration']:.1f}s)")
+                
+                # Verify the downloaded file exists and is actually a file (not a directory)
+                if not backup_file.exists():
+                    self.logger.error(f"Downloaded backup file does not exist: {backup_file}")
+                    return False
+                
+                if backup_file.is_dir():
+                    self.logger.error(f"Downloaded backup path is a directory, not a file: {backup_file}")
+                    self.logger.error("This usually means rclone downloaded it incorrectly. Check S3 path.")
+                    return False
+                
+                if not backup_file.is_file():
+                    self.logger.error(f"Downloaded backup path is not a regular file: {backup_file}")
+                    return False
+                
             except Exception as e:
                 self.logger.error(f"Error downloading PostgreSQL backup from S3: {e}")
                 return False
@@ -609,6 +624,10 @@ class AlfrescoRestore:
             
             if not backup_file.exists():
                 self.logger.error(f"PostgreSQL backup file not found: {backup_file}")
+                return False
+            
+            if backup_file.is_dir():
+                self.logger.error(f"Backup path is a directory, not a file: {backup_file}")
                 return False
         
         # Load database connection details from .env file
@@ -708,6 +727,15 @@ class AlfrescoRestore:
             # Only check gunzip if psql failed, or if gunzip failed with a non-SIGPIPE error
             psql_success = psql_process.returncode == 0
             
+            # Check if gunzip failed (and it's not a SIGPIPE, which is normal)
+            gunzip_failed = gunzip_process.returncode != 0 and gunzip_process.returncode != -13
+            if gunzip_failed:
+                gunzip_error = gunzip_stderr.decode('utf-8', errors='ignore') if gunzip_stderr else ''
+                self.logger.error(f"gunzip failed with code {gunzip_process.returncode}: {gunzip_error}")
+                if 'is a directory' in gunzip_error.lower():
+                    self.logger.error("Backup file is a directory, not a file. Download may have failed.")
+                    return False
+            
             if not psql_success:
                 # psql failed, check gunzip for additional error info
                 if gunzip_process.returncode != 0 and gunzip_process.returncode != -13:
@@ -730,7 +758,14 @@ class AlfrescoRestore:
                 # gunzip failed with something other than expected SIGPIPE
                 error_msg = gunzip_stderr.decode('utf-8', errors='replace') if gunzip_stderr else 'Unknown error'
                 self.logger.warning(f"gunzip exited with code {gunzip_process.returncode}: {error_msg}")
-                # Don't fail the restore if psql succeeded, but log the warning
+                
+                # If gunzip failed because the file is a directory, this is a critical error
+                if 'is a directory' in error_msg.lower():
+                    self.logger.error("Backup file is a directory, not a file. Restore cannot proceed.")
+                    return False
+                
+                # For other gunzip errors, log warning but don't fail if psql succeeded
+                # (psql may have already read all the data before gunzip failed)
             
             self.logger.info("PostgreSQL restore completed successfully")
             
