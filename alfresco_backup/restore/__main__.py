@@ -904,7 +904,7 @@ class AlfrescoRestore:
             # Verify restore succeeded by checking database content
             self.logger.info("Verifying database restore...")
             verify_result = subprocess.run(
-                [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-c', 
+                [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-t', '-A', '-c', 
                  "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';"],
                 env=env,
                 capture_output=True,
@@ -913,12 +913,18 @@ class AlfrescoRestore:
             )
             
             if verify_result.returncode == 0:
-                table_count = verify_result.stdout.strip().split('\n')[-1].strip()
-                self.logger.info(f"Database verification: Found {table_count} tables in database")
+                # Parse the count (psql -t -A outputs just the value)
+                table_count_str = verify_result.stdout.strip()
+                try:
+                    table_count = int(table_count_str)
+                    self.logger.info(f"Database verification: Found {table_count} tables in database")
+                except ValueError:
+                    self.logger.warning(f"Could not parse table count: {table_count_str}")
+                    table_count = 0
                 
                 # Check for Alfresco-specific tables
                 alfresco_check = subprocess.run(
-                    [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-c',
+                    [psql_cmd, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-t', '-A', '-c',
                      "SELECT COUNT(*) FROM information_schema.tables WHERE table_name LIKE 'alf_%';"],
                     env=env,
                     capture_output=True,
@@ -927,12 +933,19 @@ class AlfrescoRestore:
                 )
                 
                 if alfresco_check.returncode == 0:
-                    alf_table_count = alfresco_check.stdout.strip().split('\n')[-1].strip()
-                    self.logger.info(f"Found {alf_table_count} Alfresco tables (alf_*)")
-                    
-                    if int(alf_table_count) == 0:
-                        self.logger.warning("WARNING: No Alfresco tables found! Restore may have failed or restored to wrong database.")
-                        self.logger.warning(f"Please verify that database '{pg_database}' is correct.")
+                    alf_table_count_str = alfresco_check.stdout.strip()
+                    try:
+                        alf_table_count = int(alf_table_count_str)
+                        self.logger.info(f"Found {alf_table_count} Alfresco tables (alf_*)")
+                        
+                        if alf_table_count == 0:
+                            self.logger.warning("WARNING: No Alfresco tables found! Restore may have failed or restored to wrong database.")
+                            self.logger.warning(f"Please verify that database '{pg_database}' is correct.")
+                        elif alf_table_count < 50:
+                            self.logger.warning(f"WARNING: Only {alf_table_count} Alfresco tables found. Expected 50+ tables.")
+                            self.logger.warning("Restore may be incomplete.")
+                    except ValueError:
+                        self.logger.warning(f"Could not parse Alfresco table count: {alf_table_count_str}")
                 else:
                     self.logger.warning("Could not verify Alfresco tables")
             else:
