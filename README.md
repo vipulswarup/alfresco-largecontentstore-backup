@@ -1,5 +1,7 @@
 # Alfresco Backup System
 
+NOTE: This is a vibe-coded system. But it has been battle-tested in productiom.
+
 Production-grade backup and restore system for Alfresco deployments, designed to handle large contentstores (5TB+) with PostgreSQL database backups, contentstore snapshots, automated retention, and comprehensive restore capabilities.
 
 ## Quick Start

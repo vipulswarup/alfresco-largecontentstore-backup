@@ -3,6 +3,7 @@
 Manual cleanup script for Alfresco backups.
 Use this to free up disk space by removing old or failed backup attempts.
 Features multithreaded deletion for faster cleanup of large backups.
+Supports both local backups and S3 backups.
 """
 
 import os
@@ -10,6 +11,7 @@ import sys
 import shutil
 import threading
 import time
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -237,6 +239,216 @@ def delete_backup_serial(backup_path):
         return (False, [str(e)])
 
 
+def get_s3_config():
+    """Load S3 configuration from .env file or environment variables."""
+    s3_config = {}
+    
+    # Try to load from .env file
+    env_file = Path('.env')
+    if env_file.exists():
+        try:
+            with open(env_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        if key in ['S3_BUCKET', 'S3_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']:
+                            s3_config[key] = value
+        except Exception as e:
+            print(f"Warning: Could not read .env file: {e}")
+    
+    # Also check environment variables
+    for key in ['S3_BUCKET', 'S3_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']:
+        env_value = os.getenv(key)
+        if env_value:
+            s3_config[key] = env_value
+    
+    # Check if S3 is configured
+    if s3_config.get('S3_BUCKET') and s3_config.get('AWS_ACCESS_KEY_ID') and s3_config.get('AWS_SECRET_ACCESS_KEY'):
+        s3_config['enabled'] = True
+        s3_config['region'] = s3_config.get('S3_REGION', 'us-east-1')
+    else:
+        s3_config['enabled'] = False
+    
+    return s3_config
+
+
+def get_rclone_env(access_key_id: str, secret_access_key: str, region: str):
+    """Get environment variables for rclone S3 operations."""
+    env = os.environ.copy()
+    env['RCLONE_CONFIG_S3_TYPE'] = 's3'
+    env['RCLONE_CONFIG_S3_PROVIDER'] = 'AWS'
+    env['RCLONE_CONFIG_S3_ACCESS_KEY_ID'] = access_key_id
+    env['RCLONE_CONFIG_S3_SECRET_ACCESS_KEY'] = secret_access_key
+    env['RCLONE_CONFIG_S3_REGION'] = region
+    env['RCLONE_CONFIG_S3_ENV_AUTH'] = 'false'
+    return env
+
+
+def check_rclone_installed():
+    """Check if rclone is installed."""
+    try:
+        result = subprocess.run(['rclone', 'version'], capture_output=True, timeout=10)
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def list_s3_postgres_backups(s3_bucket, access_key_id, secret_access_key, region):
+    """List PostgreSQL backups in S3."""
+    if not check_rclone_installed():
+        print("ERROR: rclone is not installed. Cannot list S3 backups.")
+        return []
+    
+    backups = []
+    s3_path = f"s3:{s3_bucket}/alfresco-backups/postgres/"
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        
+        # Try multiple rclone commands to find backups
+        for cmd_type in ['lsf-R', 'lsf', 'ls']:
+            if cmd_type == 'lsf-R':
+                cmd = ['rclone', 'lsf', '-R', '--format', 'p', s3_path]
+            elif cmd_type == 'lsf':
+                cmd = ['rclone', 'lsf', '--format', 'p', s3_path]
+            else:
+                cmd = ['rclone', 'ls', s3_path]
+            
+            process = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+            
+            if process.returncode == 0 and process.stdout:
+                seen_timestamps = set()
+                for line in process.stdout.strip().split('\n'):
+                    line = line.strip()
+                    if 'postgres-' in line and '.sql.gz' in line:
+                        # Extract timestamp from filename
+                        try:
+                            # Format: postgres-YYYY-MM-DD_HH-MM-SS.sql.gz
+                            parts = line.split('/')
+                            filename = parts[-1].rstrip('/')
+                            if filename.startswith('postgres-') and filename.endswith('.sql.gz'):
+                                timestamp_str = filename.replace('postgres-', '').replace('.sql.gz', '')
+                                
+                                # Skip if we've already seen this timestamp
+                                if timestamp_str in seen_timestamps:
+                                    continue
+                                seen_timestamps.add(timestamp_str)
+                                
+                                backup_time = datetime.strptime(timestamp_str, '%Y-%m-%d_%H-%M-%S')
+                                age_hours = (datetime.now() - backup_time).total_seconds() / 3600
+                                age_days = age_hours / 24
+                                
+                                # Build S3 path relative to bucket
+                                s3_relative_path = f"alfresco-backups/postgres/{filename}"
+                                
+                                backups.append({
+                                    'type': 'postgres',
+                                    's3_path': s3_relative_path,
+                                    'name': filename,
+                                    'timestamp': backup_time,
+                                    'age_days': age_days,
+                                    'size_gb': None  # Size calculation would require additional rclone call
+                                })
+                        except Exception as e:
+                            continue
+                
+                if backups:
+                    break  # Found backups, no need to try other commands
+        
+        return sorted(backups, key=lambda x: x['timestamp'])
+    except Exception as e:
+        print(f"ERROR: Failed to list S3 PostgreSQL backups: {e}")
+        return []
+
+
+def list_s3_contentstore_backups(s3_bucket, access_key_id, secret_access_key, region):
+    """List contentstore backups in S3 (using folder structure or versioning)."""
+    if not check_rclone_installed():
+        print("ERROR: rclone is not installed. Cannot list S3 backups.")
+        return []
+    
+    backups = []
+    s3_full_path = f"s3:{s3_bucket}/alfresco-backups/contentstore/"
+    s3_relative_path = "alfresco-backups/contentstore/"
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        
+        # Get folder size for contentstore (it's a single synced directory, not timestamped folders)
+        # For S3, we can't easily list "backups" since contentstore is synced directly
+        # We'll show the current contentstore size and note that S3 versioning handles history
+        cmd = ['rclone', 'size', '--json', s3_full_path]
+        process = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+        
+        if process.returncode == 0:
+            try:
+                import json
+                data = json.loads(process.stdout)
+                size_bytes = data.get('bytes', 0)
+                size_gb = size_bytes / (1024**3)
+                
+                backups.append({
+                    'type': 'contentstore',
+                    's3_path': s3_relative_path,
+                    'name': 'contentstore (S3 synced)',
+                    'timestamp': datetime.now(),  # Current state
+                    'age_days': 0,
+                    'size_gb': size_gb,
+                    'note': 'S3 versioning maintains history - use S3 console to manage versions'
+                })
+            except Exception:
+                pass
+        
+        return backups
+    except Exception as e:
+        print(f"ERROR: Failed to list S3 contentstore: {e}")
+        return []
+
+
+def delete_s3_backup(s3_bucket, s3_path, access_key_id, secret_access_key, region, backup_type='postgres'):
+    """
+    Delete a backup from S3 using rclone.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        s3_path: S3 path to delete (relative to bucket)
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+        backup_type: 'postgres' or 'contentstore'
+    
+    Returns:
+        Tuple of (success, error_message)
+    """
+    if not check_rclone_installed():
+        return (False, "rclone is not installed")
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        s3_full_path = f"s3:{s3_bucket}/{s3_path.lstrip('/')}"
+        
+        # Use rclone purge for directories or deletefile for files
+        if backup_type == 'postgres':
+            # PostgreSQL backups are files
+            cmd = ['rclone', 'deletefile', s3_full_path]
+        else:
+            # Contentstore is a directory - use purge to remove all versions
+            cmd = ['rclone', 'purge', s3_full_path]
+        
+        process = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+        
+        if process.returncode == 0:
+            return (True, None)
+        else:
+            error_msg = process.stderr if process.stderr else process.stdout
+            return (False, error_msg[:500])
+    except Exception as e:
+        return (False, str(e))
+
+
 def list_contentstore_backups(backup_dir):
     """List all contentstore backups with sizes and ages."""
     contentstore_dir = Path(backup_dir) / 'contentstore'
@@ -272,6 +484,7 @@ def list_contentstore_backups(backup_dir):
                 is_current = (last_backup and item.resolve() == last_backup)
                 
                 backups.append({
+                    'type': 'local',
                     'path': item,
                     'name': item.name,
                     'timestamp': backup_time,
@@ -286,153 +499,269 @@ def list_contentstore_backups(backup_dir):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 cleanup_backups.py <backup_directory>")
-        print("Example: python3 cleanup_backups.py /mnt/data6tb/backup")
-        sys.exit(1)
-    
-    backup_dir = Path(sys.argv[1])
-    
-    if not backup_dir.exists():
-        print(f"ERROR: Backup directory not found: {backup_dir}")
-        sys.exit(1)
-    
     print("=" * 80)
     print("Alfresco Backup Cleanup Tool")
     print("=" * 80)
-    print(f"\nAnalyzing backups in: {backup_dir}\n")
     
-    backups = list_contentstore_backups(backup_dir)
+    # Check for S3 configuration
+    s3_config = get_s3_config()
     
-    if not backups:
-        print("No backups found.")
-        return
-    
-    print("\n" + "=" * 80)
-    print("BACKUP SUMMARY")
-    print("=" * 80)
-    
-    total_size = 0
-    for i, backup in enumerate(backups, 1):
-        status = "CURRENT" if backup['is_current'] else "old/failed"
-        print(f"\n{i}. {backup['name']}")
-        print(f"   Status: {status}")
-        print(f"   Age: {backup['age_days']:.1f} days")
-        print(f"   Size: {backup['size_gb']:.1f} GB")
-        total_size += backup['size_gb']
-    
-    print(f"\nTotal disk usage: {total_size:.1f} GB")
-    
-    # Show disk space
-    import shutil
-    disk_stat = shutil.disk_usage(backup_dir)
-    print(f"Available disk space: {disk_stat.free / (1024**3):.1f} GB")
-    print(f"Total disk capacity: {disk_stat.total / (1024**3):.1f} GB")
-    
-    print("\n" + "=" * 80)
-    print("CLEANUP OPTIONS")
-    print("=" * 80)
-    print("\n1. Remove all old/failed backups (keep only CURRENT)")
-    print("2. Remove specific backups (interactive)")
-    print("3. Exit without changes")
-    
-    choice = input("\nEnter your choice (1-3): ").strip()
-    
-    # Ask about deletion method
-    use_parallel = True
-    num_threads = 5
-    
-    if choice in ['1', '2']:
-        parallel_choice = input("\nUse parallel deletion for faster cleanup? (Y/n): ").strip().lower()
-        use_parallel = parallel_choice != 'n'
+    if s3_config.get('enabled'):
+        print("\nS3 backup mode detected")
+        print(f"S3 Bucket: {s3_config.get('S3_BUCKET')}")
+        print(f"Region: {s3_config.get('region')}")
         
-        if use_parallel:
-            thread_input = input("Number of threads (default 5, recommended 3-8): ").strip()
-            if thread_input:
-                try:
-                    num_threads = int(thread_input)
-                    if num_threads < 1 or num_threads > 16:
-                        print("Warning: Using default of 5 threads (valid range: 1-16)")
-                        num_threads = 5
-                except ValueError:
-                    print("Warning: Invalid input, using default of 5 threads")
-                    num_threads = 5
-    
-    if choice == '1':
-        # Remove all except current
-        to_remove = [b for b in backups if not b['is_current']]
+        if not check_rclone_installed():
+            print("\nERROR: rclone is not installed. Cannot clean S3 backups.")
+            print("Please install rclone to use S3 cleanup functionality.")
+            sys.exit(1)
         
-        if not to_remove:
-            print("\nNo old/failed backups to remove.")
+        # List S3 backups
+        print("\nAnalyzing S3 backups...")
+        postgres_backups = list_s3_postgres_backups(
+            s3_config['S3_BUCKET'],
+            s3_config['AWS_ACCESS_KEY_ID'],
+            s3_config['AWS_SECRET_ACCESS_KEY'],
+            s3_config['region']
+        )
+        
+        contentstore_backups = list_s3_contentstore_backups(
+            s3_config['S3_BUCKET'],
+            s3_config['AWS_ACCESS_KEY_ID'],
+            s3_config['AWS_SECRET_ACCESS_KEY'],
+            s3_config['region']
+        )
+        
+        all_backups = postgres_backups + contentstore_backups
+        
+        if not all_backups:
+            print("\nNo backups found in S3.")
             return
         
-        print(f"\nThis will remove {len(to_remove)} backup(s):")
-        for backup in to_remove:
-            print(f"  - {backup['name']} ({backup['size_gb']:.1f} GB)")
+        print("\n" + "=" * 80)
+        print("BACKUP SUMMARY (S3)")
+        print("=" * 80)
         
-        total_to_free = sum(b['size_gb'] for b in to_remove)
-        print(f"\nTotal space to free: {total_to_free:.1f} GB")
+        total_size = 0
+        for i, backup in enumerate(all_backups, 1):
+            size_str = f"{backup['size_gb']:.1f} GB" if backup['size_gb'] else "size unknown"
+            print(f"\n{i}. {backup['name']} ({backup['type']})")
+            print(f"   Age: {backup['age_days']:.1f} days")
+            print(f"   Size: {size_str}")
+            if 'note' in backup:
+                print(f"   Note: {backup['note']}")
+            if backup['size_gb']:
+                total_size += backup['size_gb']
         
-        confirm = input("\nAre you sure? This cannot be undone! (yes/no): ").strip().lower()
+        if total_size > 0:
+            print(f"\nTotal size: {total_size:.1f} GB")
         
-        if confirm == 'yes':
-            start_time = time.time()
-            total_removed = 0
-            total_failed = 0
-            
-            for i, backup in enumerate(to_remove, 1):
-                print(f"\n[{i}/{len(to_remove)}] Removing {backup['name']} ({backup['size_gb']:.1f} GB)...")
-                
-                if use_parallel:
-                    success, errors = delete_backup_parallel(backup['path'], num_threads=num_threads)
-                else:
-                    success, errors = delete_backup_serial(backup['path'])
-                
-                if success:
-                    print(f"  ✓ Removed successfully")
-                    total_removed += 1
-                else:
-                    print(f"  ✗ Failed with errors:")
-                    for error in errors[:3]:  # Show first 3 errors
-                        print(f"    - {error}")
-                    if len(errors) > 3:
-                        print(f"    ... and {len(errors) - 3} more errors")
-                    total_failed += 1
-            
-            elapsed = time.time() - start_time
-            elapsed_min = int(elapsed / 60)
-            elapsed_sec = int(elapsed % 60)
-            
-            print("\n" + "=" * 80)
-            print(f"Cleanup complete! Removed {total_removed}/{len(to_remove)} backups in {elapsed_min}m {elapsed_sec}s")
-            if total_failed > 0:
-                print(f"Warning: {total_failed} backup(s) failed to delete completely")
-            print("=" * 80)
-        else:
-            print("\nCleanup cancelled.")
-    
-    elif choice == '2':
-        # Interactive removal
-        print("\nSelect backups to remove (enter numbers separated by commas):")
-        for i, backup in enumerate(backups, 1):
-            status = "CURRENT (cannot remove)" if backup['is_current'] else "can remove"
-            print(f"{i}. {backup['name']} - {backup['size_gb']:.1f} GB ({status})")
+        print("\n" + "=" * 80)
+        print("CLEANUP OPTIONS")
+        print("=" * 80)
+        print("\n1. Remove all PostgreSQL backups")
+        print("2. Remove specific backups (interactive)")
+        print("3. Exit without changes")
         
-        selection = input("\nEnter backup numbers to remove (e.g., 1,3,4): ").strip()
+        choice = input("\nEnter your choice (1-3): ").strip()
         
-        try:
-            indices = [int(x.strip()) - 1 for x in selection.split(',')]
-            to_remove = []
-            
-            for idx in indices:
-                if 0 <= idx < len(backups):
-                    if backups[idx]['is_current']:
-                        print(f"\nWARNING: Skipping {backups[idx]['name']} (current backup)")
-                    else:
-                        to_remove.append(backups[idx])
+        if choice == '1':
+            # Remove all PostgreSQL backups
+            to_remove = [b for b in all_backups if b['type'] == 'postgres']
             
             if not to_remove:
-                print("\nNo valid backups selected.")
+                print("\nNo PostgreSQL backups to remove.")
+                return
+            
+            print(f"\nThis will remove {len(to_remove)} PostgreSQL backup(s):")
+            for backup in to_remove:
+                print(f"  - {backup['name']}")
+            
+            confirm = input("\nAre you sure? This cannot be undone! (yes/no): ").strip().lower()
+            
+            if confirm == 'yes':
+                start_time = time.time()
+                total_removed = 0
+                total_failed = 0
+                
+                for i, backup in enumerate(to_remove, 1):
+                    print(f"\n[{i}/{len(to_remove)}] Removing {backup['name']}...")
+                    
+                    success, error = delete_s3_backup(
+                        s3_config['S3_BUCKET'],
+                        backup['s3_path'],
+                        s3_config['AWS_ACCESS_KEY_ID'],
+                        s3_config['AWS_SECRET_ACCESS_KEY'],
+                        s3_config['region'],
+                        backup['type']
+                    )
+                    
+                    if success:
+                        print(f"  ✓ Removed successfully")
+                        total_removed += 1
+                    else:
+                        print(f"  ✗ Failed: {error}")
+                        total_failed += 1
+                
+                elapsed = time.time() - start_time
+                elapsed_min = int(elapsed / 60)
+                elapsed_sec = int(elapsed % 60)
+                
+                print("\n" + "=" * 80)
+                print(f"Cleanup complete! Removed {total_removed}/{len(to_remove)} backups in {elapsed_min}m {elapsed_sec}s")
+                if total_failed > 0:
+                    print(f"Warning: {total_failed} backup(s) failed to delete")
+                print("=" * 80)
+            else:
+                print("\nCleanup cancelled.")
+        
+        elif choice == '2':
+            # Interactive removal
+            print("\nSelect backups to remove (enter numbers separated by commas):")
+            for i, backup in enumerate(all_backups, 1):
+                size_str = f"{backup['size_gb']:.1f} GB" if backup['size_gb'] else "size unknown"
+                print(f"{i}. {backup['name']} ({backup['type']}) - {size_str}")
+            
+            selection = input("\nEnter backup numbers to remove (e.g., 1,3,4): ").strip()
+            
+            try:
+                indices = [int(x.strip()) - 1 for x in selection.split(',')]
+                to_remove = []
+                
+                for idx in indices:
+                    if 0 <= idx < len(all_backups):
+                        to_remove.append(all_backups[idx])
+                
+                if not to_remove:
+                    print("\nNo valid backups selected.")
+                    return
+                
+                print(f"\nThis will remove {len(to_remove)} backup(s):")
+                for backup in to_remove:
+                    print(f"  - {backup['name']} ({backup['type']})")
+                
+                confirm = input("\nAre you sure? This cannot be undone! (yes/no): ").strip().lower()
+                
+                if confirm == 'yes':
+                    start_time = time.time()
+                    total_removed = 0
+                    total_failed = 0
+                    
+                    for i, backup in enumerate(to_remove, 1):
+                        print(f"\n[{i}/{len(to_remove)}] Removing {backup['name']}...")
+                        
+                        success, error = delete_s3_backup(
+                            s3_config['S3_BUCKET'],
+                            backup['s3_path'],
+                            s3_config['AWS_ACCESS_KEY_ID'],
+                            s3_config['AWS_SECRET_ACCESS_KEY'],
+                            s3_config['region'],
+                            backup['type']
+                        )
+                        
+                        if success:
+                            print(f"  ✓ Removed successfully")
+                            total_removed += 1
+                        else:
+                            print(f"  ✗ Failed: {error}")
+                            total_failed += 1
+                    
+                    elapsed = time.time() - start_time
+                    elapsed_min = int(elapsed / 60)
+                    elapsed_sec = int(elapsed % 60)
+                    
+                    print("\n" + "=" * 80)
+                    print(f"Cleanup complete! Removed {total_removed}/{len(to_remove)} backups in {elapsed_min}m {elapsed_sec}s")
+                    if total_failed > 0:
+                        print(f"Warning: {total_failed} backup(s) failed to delete")
+                    print("=" * 80)
+                else:
+                    print("\nCleanup cancelled.")
+            
+            except (ValueError, IndexError):
+                print("\nInvalid selection.")
+        
+        else:
+            print("\nExiting without changes.")
+    
+    else:
+        # Local backup mode
+        if len(sys.argv) < 2:
+            print("Usage: python3 cleanup_backups.py <backup_directory>")
+            print("Example: python3 cleanup_backups.py /mnt/data6tb/backup")
+            print("\nNote: For S3 backups, ensure .env file contains S3_BUCKET, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY")
+            sys.exit(1)
+        
+        backup_dir = Path(sys.argv[1])
+        
+        if not backup_dir.exists():
+            print(f"ERROR: Backup directory not found: {backup_dir}")
+            sys.exit(1)
+        
+        print(f"\nAnalyzing backups in: {backup_dir}\n")
+        
+        backups = list_contentstore_backups(backup_dir)
+        
+        if not backups:
+            print("No backups found.")
+            return
+        
+        print("\n" + "=" * 80)
+        print("BACKUP SUMMARY")
+        print("=" * 80)
+        
+        total_size = 0
+        for i, backup in enumerate(backups, 1):
+            status = "CURRENT" if backup['is_current'] else "old/failed"
+            print(f"\n{i}. {backup['name']}")
+            print(f"   Status: {status}")
+            print(f"   Age: {backup['age_days']:.1f} days")
+            print(f"   Size: {backup['size_gb']:.1f} GB")
+            total_size += backup['size_gb']
+        
+        print(f"\nTotal disk usage: {total_size:.1f} GB")
+        
+        # Show disk space
+        import shutil
+        disk_stat = shutil.disk_usage(backup_dir)
+        print(f"Available disk space: {disk_stat.free / (1024**3):.1f} GB")
+        print(f"Total disk capacity: {disk_stat.total / (1024**3):.1f} GB")
+        
+        print("\n" + "=" * 80)
+        print("CLEANUP OPTIONS")
+        print("=" * 80)
+        print("\n1. Remove all old/failed backups (keep only CURRENT)")
+        print("2. Remove specific backups (interactive)")
+        print("3. Exit without changes")
+        
+        choice = input("\nEnter your choice (1-3): ").strip()
+        
+        # Ask about deletion method
+        use_parallel = True
+        num_threads = 5
+        
+        if choice in ['1', '2']:
+            parallel_choice = input("\nUse parallel deletion for faster cleanup? (Y/n): ").strip().lower()
+            use_parallel = parallel_choice != 'n'
+            
+            if use_parallel:
+                thread_input = input("Number of threads (default 5, recommended 3-8): ").strip()
+                if thread_input:
+                    try:
+                        num_threads = int(thread_input)
+                        if num_threads < 1 or num_threads > 16:
+                            print("Warning: Using default of 5 threads (valid range: 1-16)")
+                            num_threads = 5
+                    except ValueError:
+                        print("Warning: Invalid input, using default of 5 threads")
+                        num_threads = 5
+        
+        if choice == '1':
+            # Remove all except current
+            to_remove = [b for b in backups if not b['is_current']]
+            
+            if not to_remove:
+                print("\nNo old/failed backups to remove.")
                 return
             
             print(f"\nThis will remove {len(to_remove)} backup(s):")
@@ -480,11 +809,80 @@ def main():
             else:
                 print("\nCleanup cancelled.")
         
-        except (ValueError, IndexError):
-            print("\nInvalid selection.")
-    
-    else:
-        print("\nExiting without changes.")
+        elif choice == '2':
+            # Interactive removal
+            print("\nSelect backups to remove (enter numbers separated by commas):")
+            for i, backup in enumerate(backups, 1):
+                status = "CURRENT (cannot remove)" if backup['is_current'] else "can remove"
+                print(f"{i}. {backup['name']} - {backup['size_gb']:.1f} GB ({status})")
+            
+            selection = input("\nEnter backup numbers to remove (e.g., 1,3,4): ").strip()
+            
+            try:
+                indices = [int(x.strip()) - 1 for x in selection.split(',')]
+                to_remove = []
+                
+                for idx in indices:
+                    if 0 <= idx < len(backups):
+                        if backups[idx]['is_current']:
+                            print(f"\nWARNING: Skipping {backups[idx]['name']} (current backup)")
+                        else:
+                            to_remove.append(backups[idx])
+                
+                if not to_remove:
+                    print("\nNo valid backups selected.")
+                    return
+                
+                print(f"\nThis will remove {len(to_remove)} backup(s):")
+                for backup in to_remove:
+                    print(f"  - {backup['name']} ({backup['size_gb']:.1f} GB)")
+                
+                total_to_free = sum(b['size_gb'] for b in to_remove)
+                print(f"\nTotal space to free: {total_to_free:.1f} GB")
+                
+                confirm = input("\nAre you sure? This cannot be undone! (yes/no): ").strip().lower()
+                
+                if confirm == 'yes':
+                    start_time = time.time()
+                    total_removed = 0
+                    total_failed = 0
+                    
+                    for i, backup in enumerate(to_remove, 1):
+                        print(f"\n[{i}/{len(to_remove)}] Removing {backup['name']} ({backup['size_gb']:.1f} GB)...")
+                        
+                        if use_parallel:
+                            success, errors = delete_backup_parallel(backup['path'], num_threads=num_threads)
+                        else:
+                            success, errors = delete_backup_serial(backup['path'])
+                        
+                        if success:
+                            print(f"  ✓ Removed successfully")
+                            total_removed += 1
+                        else:
+                            print(f"  ✗ Failed with errors:")
+                            for error in errors[:3]:  # Show first 3 errors
+                                print(f"    - {error}")
+                            if len(errors) > 3:
+                                print(f"    ... and {len(errors) - 3} more errors")
+                            total_failed += 1
+                    
+                    elapsed = time.time() - start_time
+                    elapsed_min = int(elapsed / 60)
+                    elapsed_sec = int(elapsed % 60)
+                    
+                    print("\n" + "=" * 80)
+                    print(f"Cleanup complete! Removed {total_removed}/{len(to_remove)} backups in {elapsed_min}m {elapsed_sec}s")
+                    if total_failed > 0:
+                        print(f"Warning: {total_failed} backup(s) failed to delete completely")
+                    print("=" * 80)
+                else:
+                    print("\nCleanup cancelled.")
+            
+            except (ValueError, IndexError):
+                print("\nInvalid selection.")
+        
+        else:
+            print("\nExiting without changes.")
 
 
 if __name__ == '__main__':
