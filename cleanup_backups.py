@@ -383,32 +383,96 @@ def list_s3_contentstore_backups(s3_bucket, access_key_id, secret_access_key, re
         # Get folder size for contentstore (it's a single synced directory, not timestamped folders)
         # For S3, we can't easily list "backups" since contentstore is synced directly
         # We'll show the current contentstore size and note that S3 versioning handles history
+        print("Calculating contentstore size...")
         cmd = ['rclone', 'size', '--json', s3_full_path]
-        process = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+        process = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
         
+        size_gb = 0.0
         if process.returncode == 0:
             try:
                 import json
                 data = json.loads(process.stdout)
                 size_bytes = data.get('bytes', 0)
                 size_gb = size_bytes / (1024**3)
-                
-                backups.append({
-                    'type': 'contentstore',
-                    's3_path': s3_relative_path,
-                    'name': 'contentstore (S3 synced)',
-                    'timestamp': datetime.now(),  # Current state
-                    'age_days': 0,
-                    'size_gb': size_gb,
-                    'note': 'S3 versioning maintains history - use S3 console to manage versions'
-                })
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  Warning: Could not parse contentstore size: {e}")
+        
+        # Always add contentstore entry, even if size calculation failed
+        backups.append({
+            'type': 'contentstore',
+            's3_path': s3_relative_path,
+            'name': 'contentstore (S3 synced)',
+            'timestamp': datetime.now(),  # Current state
+            'age_days': 0,
+            'size_gb': size_gb if size_gb > 0 else None,
+            'note': 'S3 versioning maintains history - use option 3 to clean up old versions'
+        })
         
         return backups
     except Exception as e:
         print(f"ERROR: Failed to list S3 contentstore: {e}")
-        return []
+        # Still return an entry even if there was an error
+        return [{
+            'type': 'contentstore',
+            's3_path': s3_relative_path,
+            'name': 'contentstore (S3 synced)',
+            'timestamp': datetime.now(),
+            'age_days': 0,
+            'size_gb': None,
+            'note': 'Error calculating size - contentstore may exist but size unknown'
+        }]
+
+
+def cleanup_s3_contentstore_versions(s3_bucket, access_key_id, secret_access_key, region):
+    """
+    Clean up old versions of contentstore files in S3.
+    
+    Uses rclone purge to remove the entire contentstore prefix, which will delete
+    all versions of all files. This is a destructive operation.
+    
+    For more granular control (keeping current versions while deleting old ones),
+    consider using AWS S3 Lifecycle Policies via the AWS Console.
+    
+    Args:
+        s3_bucket: S3 bucket name
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        region: AWS region
+    
+    Returns:
+        Tuple of (success, error_message)
+    """
+    if not check_rclone_installed():
+        return (False, "rclone is not installed")
+    
+    try:
+        env = get_rclone_env(access_key_id, secret_access_key, region)
+        s3_contentstore_path = f"s3:{s3_bucket}/alfresco-backups/contentstore/"
+        
+        # Use rclone purge to delete the entire contentstore prefix
+        # This will remove all objects and all their versions
+        # WARNING: This deletes everything in the contentstore, not just old versions
+        cmd = [
+            'rclone',
+            'purge',
+            s3_contentstore_path,
+            '--transfers', '10',
+            '--checkers', '20',
+            '-v'
+        ]
+        
+        print("Running rclone purge to remove contentstore...")
+        process = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=3600)
+        
+        if process.returncode == 0:
+            return (True, "All contentstore data and versions have been removed")
+        else:
+            error_msg = process.stderr if process.stderr else process.stdout
+            return (False, error_msg[:500])
+    except subprocess.TimeoutExpired:
+        return (False, "Operation timed out - contentstore may be very large")
+    except Exception as e:
+        return (False, str(e))
 
 
 def delete_s3_backup(s3_bucket, s3_path, access_key_id, secret_access_key, region, backup_type='postgres'):
@@ -563,9 +627,10 @@ def main():
         print("=" * 80)
         print("\n1. Remove all PostgreSQL backups")
         print("2. Remove specific backups (interactive)")
-        print("3. Exit without changes")
+        print("3. Clean up contentstore old versions (S3 versioning)")
+        print("4. Exit without changes")
         
-        choice = input("\nEnter your choice (1-3): ").strip()
+        choice = input("\nEnter your choice (1-4): ").strip()
         
         if choice == '1':
             # Remove all PostgreSQL backups
@@ -616,6 +681,79 @@ def main():
                 print("=" * 80)
             else:
                 print("\nCleanup cancelled.")
+        
+        elif choice == '3':
+            # Clean up contentstore old versions
+            contentstore_backups_list = [b for b in all_backups if b['type'] == 'contentstore']
+            
+            if not contentstore_backups_list:
+                print("\nNo contentstore found in S3.")
+                return
+            
+            print("\n" + "=" * 80)
+            print("CONTENTSTORE CLEANUP OPTIONS")
+            print("=" * 80)
+            print("\n1. Delete entire contentstore (removes all files and all versions)")
+            print("2. Show instructions for AWS S3 Lifecycle Policies (recommended)")
+            print("3. Cancel")
+            
+            cleanup_choice = input("\nEnter your choice (1-3): ").strip()
+            
+            if cleanup_choice == '1':
+                print("\n" + "=" * 80)
+                print("WARNING: DELETE ENTIRE CONTENTSTORE")
+                print("=" * 80)
+                print("\nThis operation will DELETE THE ENTIRE CONTENTSTORE from S3.")
+                print("This includes:")
+                print("  - All files in the contentstore")
+                print("  - All versions of all files")
+                print("  - Cannot be undone")
+                print("  - May take a long time for large contentstores")
+                
+                confirm = input("\nAre you sure you want to DELETE THE ENTIRE CONTENTSTORE? (yes/no): ").strip().lower()
+                
+                if confirm == 'yes':
+                    print("\nDeleting entire contentstore...")
+                    print("This may take a while depending on the size of your contentstore...")
+                    
+                    success, error = cleanup_s3_contentstore_versions(
+                        s3_config['S3_BUCKET'],
+                        s3_config['AWS_ACCESS_KEY_ID'],
+                        s3_config['AWS_SECRET_ACCESS_KEY'],
+                        s3_config['region']
+                    )
+                    
+                    if success:
+                        print("\n✓ Contentstore deletion completed successfully")
+                        if error:
+                            print(f"Note: {error}")
+                    else:
+                        print(f"\n✗ Contentstore deletion failed: {error}")
+                else:
+                    print("\nDeletion cancelled.")
+            
+            elif cleanup_choice == '2':
+                print("\n" + "=" * 80)
+                print("AWS S3 LIFECYCLE POLICIES - RECOMMENDED APPROACH")
+                print("=" * 80)
+                print("\nTo clean up old contentstore versions while keeping current files:")
+                print("\n1. Go to AWS S3 Console")
+                print(f"2. Navigate to bucket: {s3_config.get('S3_BUCKET')}")
+                print("3. Go to 'Management' tab > 'Lifecycle rules'")
+                print("4. Create a new lifecycle rule:")
+                print("   - Rule name: contentstore-version-cleanup")
+                print("   - Prefix: alfresco-backups/contentstore/")
+                print("   - Enable: 'Permanently delete noncurrent versions of objects'")
+                print("   - Days after objects become noncurrent: 30 (or your preferred retention)")
+                print("   - Optionally: 'Keep the following number of noncurrent versions': 1-3")
+                print("\n5. Save the rule")
+                print("\nThis will automatically delete old versions while keeping current files.")
+                print("\nAlternatively, use AWS CLI:")
+                print(f"  aws s3api put-bucket-lifecycle-configuration --bucket {s3_config.get('S3_BUCKET')} --lifecycle-configuration file://lifecycle.json")
+                print("\nSee AWS documentation for lifecycle policy JSON format.")
+            
+            else:
+                print("\nCancelled.")
         
         elif choice == '2':
             # Interactive removal
