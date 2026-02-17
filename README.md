@@ -9,11 +9,14 @@ Production-grade backup and restore system for Alfresco deployments, designed to
 **Required system packages:**
 ```bash
 # On Debian/Ubuntu:
-sudo apt install python3 python3-venv python3-pip
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip python3-venv postgresql-client rsync rclone
 
 # On RHEL/CentOS:
-sudo yum install python3 python3-pip
+sudo yum install python3 python3-pip postgresql rsync rclone
 ```
+
+**Note:** The setup wizard will check for these tools and provide installation instructions if any are missing.
 
 ### Installation
 
@@ -66,17 +69,7 @@ This creates the virtual environment and installs dependencies without requiring
 python3 restore.py
 ```
 
-Select restore mode and follow prompts. **Important:** After restore, clear Solr4 indexes to avoid search errors:
-
-```bash
-# After restore completes, clear Solr4 indexes
-rm -rf $ALF_BASE_DIR/alf_data/solr4/index
-# Or if using embedded Solr:
-rm -rf $ALF_BASE_DIR/alf_data/solr4/workspace/SpacesStore/index
-rm -rf $ALF_BASE_DIR/alf_data/solr4/archive/SpacesStore/index
-```
-
-Alfresco will rebuild indexes on next startup.
+Select restore mode and follow prompts. The restore script will prompt you to clear Solr4 indexes after restore (recommended). Alfresco will rebuild indexes automatically on next startup.
 
 ## Configuration
 
@@ -112,13 +105,13 @@ The restore system supports multiple modes:
 3. Backup current data (automatic)
 4. Restore PostgreSQL from SQL dump
 5. Restore contentstore (local rsync or S3 versioning)
-6. **Clear Solr4 indexes** (required after restore)
+6. **Clear Solr4 indexes** (prompted by restore script, recommended)
 7. Start Tomcat
 8. Verify services are running
 
 ### Clearing Solr4 Indexes After Restore
 
-After restore, Solr4 indexes must be cleared to avoid search errors. The indexes will be rebuilt automatically on next startup.
+After restore, Solr4 indexes must be cleared to avoid search errors. The restore script will prompt you to clear indexes automatically. If you skip this step, clear them manually:
 
 **For embedded Solr4:**
 ```bash
@@ -132,7 +125,7 @@ rm -rf $ALF_BASE_DIR/alf_data/solr4/archive/SpacesStore/index
 rm -rf $ALF_BASE_DIR/alf_data/solr4/index
 ```
 
-**Note:** The restore script does not automatically clear indexes. You must do this manually after restore completes.
+**Note:** The restore script will prompt you to clear indexes. Alfresco will rebuild indexes automatically on next startup.
 
 ## Features
 

@@ -506,17 +506,27 @@ class AlfrescoRestore:
             return True
     
     def backup_current_data(self) -> Tuple[bool, str]:
-        """Backup current data before restore."""
+        """
+        Backup current data before restore.
+        
+        Note: We do NOT move the PostgreSQL data directory because:
+        1. SQL dump restores require PostgreSQL to be running
+        2. PostgreSQL needs its data directory to exist to start
+        3. The SQL dump will restore data into the existing database
+        4. Only the contentstore directory needs to be moved
+        """
         self.logger.info("Creating backup of current data...")
         timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         
         try:
+            # Do NOT move PostgreSQL data directory - PostgreSQL must be running for SQL dump restore
+            # The SQL dump will restore data into the existing database
             if self.config.postgres_data_dir and self.config.postgres_data_dir.exists():
-                backup_name = f"{self.config.postgres_data_dir.name}.backup.{timestamp}"
-                backup_pg = self.config.postgres_data_dir.parent / backup_name
-                subprocess.run(['sudo', 'mv', str(self.config.postgres_data_dir), str(backup_pg)], check=True)
-                self.logger.info(f"Backed up PostgreSQL data to: {backup_pg}")
+                self.logger.info(f"PostgreSQL data directory exists: {self.config.postgres_data_dir}")
+                self.logger.info("Keeping PostgreSQL data directory (required for SQL dump restore)")
+                self.logger.info("SQL dump will restore data into the existing database")
             
+            # Only move contentstore directory
             if self.config.contentstore_dir and self.config.contentstore_dir.exists():
                 backup_cs = self.config.contentstore_dir.parent / f'contentstore.backup.{timestamp}'
                 subprocess.run(['sudo', 'mv', str(self.config.contentstore_dir), str(backup_cs)], check=True)
@@ -1335,6 +1345,86 @@ recovery_target_timeline = 'latest'
         except Exception as e:
             self.logger.error(f"Error starting Alfresco: {e}")
             return False
+    
+    def clear_solr_indexes(self) -> bool:
+        """
+        Clear Solr4 indexes to avoid search errors after restore.
+        
+        After restoring database and contentstore, Solr indexes may be out of sync
+        and need to be cleared. Alfresco will rebuild them automatically on next startup.
+        
+        Returns:
+            True if indexes were cleared (or didn't exist), False on error
+        """
+        self.logger.info("Clearing Solr4 indexes...")
+        
+        alf_base_path = Path(self.config.alf_base_dir) if isinstance(self.config.alf_base_dir, str) else self.config.alf_base_dir
+        solr4_dir = alf_base_path / 'alf_data' / 'solr4'
+        
+        if not solr4_dir.exists():
+            self.logger.warning(f"Solr4 directory not found: {solr4_dir}")
+            self.logger.info("Solr may be external or indexes already cleared")
+            return True
+        
+        cleared_any = False
+        
+        # Check for embedded Solr4 structure (workspace/SpacesStore/index, archive/SpacesStore/index)
+        workspace_index = solr4_dir / 'workspace' / 'SpacesStore' / 'index'
+        archive_index = solr4_dir / 'archive' / 'SpacesStore' / 'index'
+        
+        if workspace_index.exists() or archive_index.exists():
+            self.logger.info("Found embedded Solr4 indexes")
+            
+            if workspace_index.exists():
+                self.logger.info(f"Clearing workspace index: {workspace_index}")
+                try:
+                    subprocess.run(
+                        ['sudo', '-u', self.config.alfresco_user, 'rm', '-rf', str(workspace_index)],
+                        check=True
+                    )
+                    self.logger.info("Workspace index cleared")
+                    cleared_any = True
+                except Exception as e:
+                    self.logger.error(f"Failed to clear workspace index: {e}")
+                    return False
+            
+            if archive_index.exists():
+                self.logger.info(f"Clearing archive index: {archive_index}")
+                try:
+                    subprocess.run(
+                        ['sudo', '-u', self.config.alfresco_user, 'rm', '-rf', str(archive_index)],
+                        check=True
+                    )
+                    self.logger.info("Archive index cleared")
+                    cleared_any = True
+                except Exception as e:
+                    self.logger.error(f"Failed to clear archive index: {e}")
+                    return False
+        
+        # Check for external Solr structure (solr4/index)
+        external_index = solr4_dir / 'index'
+        if external_index.exists():
+            self.logger.info("Found external Solr index")
+            self.logger.info(f"Clearing external index: {external_index}")
+            try:
+                subprocess.run(
+                    ['sudo', '-u', self.config.alfresco_user, 'rm', '-rf', str(external_index)],
+                    check=True
+                )
+                self.logger.info("External index cleared")
+                cleared_any = True
+            except Exception as e:
+                self.logger.error(f"Failed to clear external index: {e}")
+                return False
+        
+        if not cleared_any:
+            self.logger.warning("No Solr indexes found to clear")
+            self.logger.info("Indexes may have already been cleared or Solr is configured differently")
+        else:
+            self.logger.info("Solr4 indexes cleared successfully")
+            self.logger.info("Alfresco will rebuild indexes automatically on next startup")
+        
+        return True
 
 
 def ask_question(prompt: str, default: Optional[str] = None) -> str:
@@ -1754,7 +1844,24 @@ def main():
                     logger.error("Contentstore restore failed")
                     sys.exit(1)
             
-            # Step 8: Start Tomcat (PostgreSQL is already running)
+            # Step 8: Clear Solr4 indexes (optional but recommended)
+            logger.section("Clearing Solr4 Indexes")
+            logger.warning("After restore, Solr4 indexes must be cleared to avoid search errors.")
+            logger.info("Alfresco will rebuild indexes automatically on next startup.")
+            
+            clear_indexes = input("\nClear Solr4 indexes now? [Y/n]: ").strip().lower()
+            if clear_indexes != 'n':
+                if not restore.clear_solr_indexes():
+                    logger.warning("Failed to clear Solr4 indexes - you may need to clear them manually")
+                    logger.info("See README.md for manual clearing instructions")
+                else:
+                    logger.info("Solr4 indexes cleared successfully")
+            else:
+                logger.warning("Skipping Solr4 index clearing")
+                logger.warning("You MUST clear indexes manually after restore to avoid search errors")
+                logger.info("See README.md for clearing instructions")
+            
+            # Step 9: Start Tomcat (PostgreSQL is already running)
             logger.section("Starting Tomcat")
             if not restore.start_tomcat_only():
                 logger.error("Failed to start Tomcat")
@@ -1762,9 +1869,7 @@ def main():
                 logger.info("Check logs: tail -f {}/tomcat/logs/catalina.out".format(config.alf_base_dir))
             else:
                 logger.info("Tomcat started successfully")
-                logger.warning("NOTE: After restore, Alfresco may need to reindex content.")
-                logger.warning("Check Admin Tools > Node Browser to verify content is accessible.")
-                logger.warning("If documents don't appear, trigger a reindex from Admin Tools > Search Management.")
+                logger.info("Alfresco will rebuild Solr4 indexes automatically on startup")
             
             logger.section("Restore Complete")
             logger.info("Full system restore completed successfully!")
@@ -1878,11 +1983,30 @@ def main():
                 logger.error("Contentstore PITR restore failed")
                 sys.exit(1)
             
-            # Step 8: Start Tomcat (PostgreSQL is already running)
+            # Step 8: Clear Solr4 indexes (optional but recommended)
+            logger.section("Clearing Solr4 Indexes")
+            logger.warning("After restore, Solr4 indexes must be cleared to avoid search errors.")
+            logger.info("Alfresco will rebuild indexes automatically on next startup.")
+            
+            clear_indexes = input("\nClear Solr4 indexes now? [Y/n]: ").strip().lower()
+            if clear_indexes != 'n':
+                if not restore.clear_solr_indexes():
+                    logger.warning("Failed to clear Solr4 indexes - you may need to clear them manually")
+                    logger.info("See README.md for manual clearing instructions")
+                else:
+                    logger.info("Solr4 indexes cleared successfully")
+            else:
+                logger.warning("Skipping Solr4 index clearing")
+                logger.warning("You MUST clear indexes manually after restore to avoid search errors")
+            
+            # Step 9: Start Tomcat (PostgreSQL is already running)
             logger.section("Starting Tomcat")
             if not restore.start_tomcat_only():
                 logger.error("Failed to start Tomcat")
                 logger.info("Tomcat may need manual intervention to start")
+            else:
+                logger.info("Tomcat started successfully")
+                logger.info("Alfresco will rebuild Solr4 indexes automatically on startup")
             
             logger.section("PITR Restore Complete")
             logger.info("Point-in-time recovery completed successfully!")
@@ -1961,11 +2085,30 @@ def main():
                 logger.error("PostgreSQL restore failed")
                 sys.exit(1)
             
-            # Step 7: Start Tomcat (PostgreSQL is already running)
+            # Step 7: Clear Solr4 indexes (optional but recommended)
+            logger.section("Clearing Solr4 Indexes")
+            logger.warning("After restore, Solr4 indexes must be cleared to avoid search errors.")
+            logger.info("Alfresco will rebuild indexes automatically on next startup.")
+            
+            clear_indexes = input("\nClear Solr4 indexes now? [Y/n]: ").strip().lower()
+            if clear_indexes != 'n':
+                if not restore.clear_solr_indexes():
+                    logger.warning("Failed to clear Solr4 indexes - you may need to clear them manually")
+                    logger.info("See README.md for manual clearing instructions")
+                else:
+                    logger.info("Solr4 indexes cleared successfully")
+            else:
+                logger.warning("Skipping Solr4 index clearing")
+                logger.warning("You MUST clear indexes manually after restore to avoid search errors")
+            
+            # Step 8: Start Tomcat (PostgreSQL is already running)
             logger.section("Starting Tomcat")
             if not restore.start_tomcat_only():
                 logger.error("Failed to start Tomcat")
                 logger.info("Tomcat may need manual intervention to start")
+            else:
+                logger.info("Tomcat started successfully")
+                logger.info("Alfresco will rebuild Solr4 indexes automatically on startup")
             
             logger.section("Restore Complete")
             logger.info("PostgreSQL restore completed successfully!")
