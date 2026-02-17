@@ -308,55 +308,58 @@ def list_s3_postgres_backups(s3_bucket, access_key_id, secret_access_key, region
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
         
-        # Try multiple rclone commands to find backups
-        for cmd_type in ['lsf-R', 'lsf', 'ls']:
-            if cmd_type == 'lsf-R':
-                cmd = ['rclone', 'lsf', '-R', '--format', 'p', s3_path]
-            elif cmd_type == 'lsf':
-                cmd = ['rclone', 'lsf', '--format', 'p', s3_path]
-            else:
-                cmd = ['rclone', 'ls', s3_path]
-            
-            process = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
-            
-            if process.returncode == 0 and process.stdout:
-                seen_timestamps = set()
-                for line in process.stdout.strip().split('\n'):
-                    line = line.strip()
-                    if 'postgres-' in line and '.sql.gz' in line:
-                        # Extract timestamp from filename
-                        try:
-                            # Format: postgres-YYYY-MM-DD_HH-MM-SS.sql.gz
-                            parts = line.split('/')
-                            filename = parts[-1].rstrip('/')
-                            if filename.startswith('postgres-') and filename.endswith('.sql.gz'):
-                                timestamp_str = filename.replace('postgres-', '').replace('.sql.gz', '')
-                                
-                                # Skip if we've already seen this timestamp
-                                if timestamp_str in seen_timestamps:
-                                    continue
-                                seen_timestamps.add(timestamp_str)
-                                
-                                backup_time = datetime.strptime(timestamp_str, '%Y-%m-%d_%H-%M-%S')
-                                age_hours = (datetime.now() - backup_time).total_seconds() / 3600
-                                age_days = age_hours / 24
-                                
-                                # Build S3 path relative to bucket
-                                s3_relative_path = f"alfresco-backups/postgres/{filename}"
-                                
-                                backups.append({
-                                    'type': 'postgres',
-                                    's3_path': s3_relative_path,
-                                    'name': filename,
-                                    'timestamp': backup_time,
-                                    'age_days': age_days,
-                                    'size_gb': None  # Size calculation would require additional rclone call
-                                })
-                        except Exception as e:
-                            continue
+        # Use recursive listing to find actual files (handles nested structure)
+        cmd = ['rclone', 'lsf', '-R', '--format', 'p', s3_path]
+        process = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+        
+        if process.returncode == 0 and process.stdout:
+            seen_timestamps = set()
+            for line in process.stdout.strip().split('\n'):
+                line = line.strip()
+                if not line or not ('postgres-' in line and '.sql.gz' in line):
+                    continue
                 
-                if backups:
-                    break  # Found backups, no need to try other commands
+                # Handle nested structure: prefix/filename/filename
+                # Example: alfresco-backups/postgres/postgres-2026-01-30_17-01-51.sql.gz/postgres-2026-01-30_17-01-51.sql.gz
+                parts = line.split('/')
+                
+                # Find the filename (last non-empty part)
+                filename = None
+                for part in reversed(parts):
+                    part = part.rstrip('/')
+                    if part.startswith('postgres-') and part.endswith('.sql.gz'):
+                        filename = part
+                        break
+                
+                if not filename:
+                    continue
+                
+                try:
+                    timestamp_str = filename.replace('postgres-', '').replace('.sql.gz', '')
+                    
+                    # Skip if we've already seen this timestamp
+                    if timestamp_str in seen_timestamps:
+                        continue
+                    seen_timestamps.add(timestamp_str)
+                    
+                    backup_time = datetime.strptime(timestamp_str, '%Y-%m-%d_%H-%M-%S')
+                    age_hours = (datetime.now() - backup_time).total_seconds() / 3600
+                    age_days = age_hours / 24
+                    
+                    # Build S3 prefix path (the directory-like path that contains the file)
+                    # This is what we need to purge to delete the backup
+                    prefix_path = f"alfresco-backups/postgres/{filename}/"
+                    
+                    backups.append({
+                        'type': 'postgres',
+                        's3_path': prefix_path,  # Prefix path for deletion
+                        'name': filename,
+                        'timestamp': backup_time,
+                        'age_days': age_days,
+                        'size_gb': None  # Size calculation would require additional rclone call
+                    })
+                except Exception as e:
+                    continue
         
         return sorted(backups, key=lambda x: x['timestamp'])
     except Exception as e:
@@ -414,7 +417,7 @@ def delete_s3_backup(s3_bucket, s3_path, access_key_id, secret_access_key, regio
     
     Args:
         s3_bucket: S3 bucket name
-        s3_path: S3 path to delete (relative to bucket)
+        s3_path: S3 path to delete (relative to bucket, should be a prefix path ending with /)
         access_key_id: AWS access key ID
         secret_access_key: AWS secret access key
         region: AWS region
@@ -428,15 +431,14 @@ def delete_s3_backup(s3_bucket, s3_path, access_key_id, secret_access_key, regio
     
     try:
         env = get_rclone_env(access_key_id, secret_access_key, region)
-        s3_full_path = f"s3:{s3_bucket}/{s3_path.lstrip('/')}"
         
-        # Use rclone purge for directories or deletefile for files
-        if backup_type == 'postgres':
-            # PostgreSQL backups are files
-            cmd = ['rclone', 'deletefile', s3_full_path]
-        else:
-            # Contentstore is a directory - use purge to remove all versions
-            cmd = ['rclone', 'purge', s3_full_path]
+        # Ensure path ends with / for prefix/directory deletion
+        path_to_delete = s3_path.rstrip('/') + '/'
+        s3_full_path = f"s3:{s3_bucket}/{path_to_delete.lstrip('/')}"
+        
+        # Use rclone purge to delete the entire prefix (directory) and all objects within it
+        # This handles the nested structure where files are stored inside prefix directories
+        cmd = ['rclone', 'purge', s3_full_path]
         
         process = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
         
