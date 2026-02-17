@@ -4,6 +4,17 @@ Production-grade backup and restore system for Alfresco deployments, designed to
 
 ## Quick Start
 
+### Prerequisites
+
+**Required system packages:**
+```bash
+# On Debian/Ubuntu:
+sudo apt install python3 python3-venv python3-pip
+
+# On RHEL/CentOS:
+sudo yum install python3 python3-pip
+```
+
 ### Installation
 
 **For Backup System (full setup):**
@@ -22,7 +33,14 @@ cd alfresco-largecontentstore-backup
 python3 setup.py --restore
 ```
 
-This creates the virtual environment and installs dependencies without requiring backup configuration.
+**Note:** If you get an error about `python3-venv` not being available, install it first:
+```bash
+sudo apt install python3-venv
+# Or for specific Python version:
+sudo apt install python3.12-venv
+```
+
+Then run `python3 setup.py --restore` again.
 
 ### Running Backups
 

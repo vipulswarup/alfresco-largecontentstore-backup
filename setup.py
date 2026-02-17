@@ -1123,6 +1123,42 @@ def create_virtual_environment():
         return False
     
     try:
+        # Check if venv module is available
+        print_info("\nChecking if venv module is available...")
+        check_result = run_command([sys.executable, '-m', 'venv', '--help'], capture_output=True, check=False)
+        if check_result is None or check_result.returncode != 0:
+            print_error("Python venv module is not available")
+            print_info("\nOn Debian/Ubuntu systems, install python3-venv package:")
+            print_info("  sudo apt install python3-venv")
+            print_info("\nOr for specific Python version:")
+            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            print_info(f"  sudo apt install python{python_version}-venv")
+            
+            if running_as_root:
+                if ask_yes_no("\nWould you like to install python3-venv now?", default=True):
+                    # Detect package manager and install
+                    if shutil.which('apt'):
+                        install_cmd = ['apt', 'install', '-y', f'python{python_version}-venv']
+                        print_info(f"Installing python{python_version}-venv...")
+                        install_result = run_command(install_cmd, check=False)
+                        if install_result and install_result.returncode == 0:
+                            print_success("python3-venv installed successfully")
+                        else:
+                            print_error("Failed to install python3-venv")
+                            print_info("Please install it manually and run setup again")
+                            return False
+                    else:
+                        print_error("Could not detect package manager (apt not found)")
+                        print_info("Please install python3-venv manually")
+                        return False
+                else:
+                    print_info("Please install python3-venv and run setup again")
+                    return False
+            else:
+                print_info("\nPlease install python3-venv and run setup again:")
+                print_info("  sudo apt install python3-venv")
+                return False
+        
         # Create venv
         print_info("\nCreating virtual environment...")
         
@@ -1135,6 +1171,9 @@ def create_virtual_environment():
         
         if result is None:
             print_error("Failed to create virtual environment")
+            if result and result.stderr and 'ensurepip is not available' in result.stderr:
+                print_info("\nThis usually means python3-venv package is not installed.")
+                print_info("Install it with: sudo apt install python3-venv")
             return False
         
         print_success("Virtual environment created")
