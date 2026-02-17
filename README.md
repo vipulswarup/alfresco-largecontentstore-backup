@@ -6,6 +6,7 @@ Production-grade backup and restore system for Alfresco deployments, designed to
 
 ### Installation
 
+**For Backup System (full setup):**
 ```bash
 git clone <repository-url>
 cd alfresco-largecontentstore-backup
@@ -14,11 +15,20 @@ sudo python3 setup.py
 
 The setup wizard will guide you through configuration and create a virtual environment.
 
+**For Restore Only (no backup configuration needed):**
+```bash
+git clone <repository-url>
+cd alfresco-largecontentstore-backup
+python3 setup.py --restore
+```
+
+This creates the virtual environment and installs dependencies without requiring backup configuration.
+
 ### Running Backups
 
 **Manual:**
 ```bash
-python backup.py
+python3 backup.py
 ```
 
 **Automated (via cron):**
@@ -26,8 +36,16 @@ Setup wizard configures daily backups at 2 AM. Check cron with `crontab -l`.
 
 ### Running Restores
 
+**First-time setup (if virtual environment doesn't exist):**
 ```bash
-python restore.py
+python3 setup.py --restore
+```
+
+This creates the virtual environment and installs dependencies without requiring backup configuration.
+
+**Then run restore:**
+```bash
+python3 restore.py
 ```
 
 Select restore mode and follow prompts. **Important:** After restore, clear Solr4 indexes to avoid search errors:
