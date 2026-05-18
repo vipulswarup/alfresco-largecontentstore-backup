@@ -1716,7 +1716,27 @@ def main():
     print("\n" + "=" * 80)
     print("  Restore Mode Selection")
     print("=" * 80)
-    print("\nSelect restore mode:")
+    print("\nSelect restore path:")
+    print("  1. V2 multi-destination restore (restic complete-set)")
+    print("  2. Legacy restore (rsync/rclone backups)")
+    
+    while True:
+        path_choice = input("\nEnter choice (1-2): ").strip()
+        if path_choice in ('1', '2'):
+            break
+        print("Please enter 1 or 2")
+
+    if path_choice == '1':
+        policies = Path('backup-policies.yml')
+        if not policies.exists():
+            logger.error("backup-policies.yml not found. Run setup.py v2 configuration first.")
+            sys.exit(1)
+        from alfresco_backup.v2.app_config import AppConfig
+        from alfresco_backup.v2.restore_runner import run_v2_restore_interactive
+        v2_config = AppConfig('.env', str(policies))
+        sys.exit(run_v2_restore_interactive(v2_config))
+
+    print("\nLegacy restore modes:")
     print("  1. Full system restore (PostgreSQL + Contentstore)")
     print("  2. Point-in-Time Recovery (PITR)")
     print("  3. PostgreSQL only")

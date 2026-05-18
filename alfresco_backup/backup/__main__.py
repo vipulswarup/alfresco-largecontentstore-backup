@@ -44,17 +44,38 @@ def setup_logging(backup_dir):
     return str(log_file)
 
 
+def _use_v2_backup(env_file: str, legacy_flag: bool) -> bool:
+    if legacy_flag:
+        return False
+    policies = Path('backup-policies.yml')
+    if policies.exists():
+        return True
+    from alfresco_backup.v2.migration import needs_migration
+    if needs_migration(Path(env_file), policies):
+        return True
+    return False
+
+
 def main():
     """Main backup orchestration."""
     parser = ArgumentParser(description='Alfresco backup system')
     parser.add_argument('env_file', nargs='?', help='Path to .env file (default: .env in current directory)')
+    parser.add_argument('--legacy', action='store_true', help='Use legacy single-destination backup')
+    parser.add_argument('--v2', action='store_true', help='Force v2 multi-destination backup')
+    parser.add_argument('--force', action='store_true', help='(v2) Run all enabled destinations now')
     args = parser.parse_args()
     
-    # Determine env file path
     env_file = args.env_file if args.env_file else '.env'
+
+    if args.v2 or _use_v2_backup(env_file, args.legacy):
+        from alfresco_backup.v2.__main__ import main as v2_main
+        sys.argv = [sys.argv[0], env_file]
+        if args.force:
+            sys.argv.append('--force')
+        v2_main()
+        return
     
     try:
-        # Load configuration
         print(f"Loading configuration from {env_file}...")
         config = BackupConfig(env_file)
         

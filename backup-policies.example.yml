@@ -1,0 +1,51 @@
+config_version: 1
+
+global:
+  staging_dir: /var/tmp/alfresco-backup
+  max_parallel_destinations: 2
+  default_maintenance:
+    enabled: true
+    day_of_week: sunday
+    time: "03:30"
+
+credential_profiles:
+  - name: do-spaces-prod
+    type: object_storage
+    provider: s3_compatible
+    endpoint_url: https://blr1.digitaloceanspaces.com
+    region: blr1
+    bucket: eisenvault-backups
+    access_key_env: OBJSTORE_DO_SPACES_PROD_ACCESS_KEY
+    secret_key_env: OBJSTORE_DO_SPACES_PROD_SECRET_KEY
+
+backup_policies:
+  - name: nas-15-days
+    enabled: true
+    destination_type: filesystem
+    repository_path: /mnt/nas/alfresco-restic
+    encryption:
+      enabled: false
+      password_env: null
+    backup_time: "02:00"
+    retention_days: 15
+    maintenance:
+      enabled: true
+      day_of_week: sunday
+      time: "03:30"
+    priority: 10
+
+  - name: s3-180-days
+    enabled: true
+    destination_type: object_storage
+    credential_profile: do-spaces-prod
+    repository_prefix: customer-a/alfresco/restic
+    encryption:
+      enabled: true
+      password_env: RESTIC_PASSWORD_S3_180
+    backup_time: "02:30"
+    retention_days: 180
+    maintenance:
+      enabled: true
+      day_of_week: sunday
+      time: "05:00"
+    priority: 20

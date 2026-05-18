@@ -165,7 +165,7 @@ def check_prerequisites(for_restore=False):
         # For backup setup, need all tools
         required_tools = {
             'python3': 'Python 3',
-            'pg_basebackup': 'PostgreSQL client tools',
+            'pg_dump': 'PostgreSQL client tools',
             'rsync': 'rsync',
             'sudo': 'sudo'
         }
@@ -1755,6 +1755,11 @@ def setup_restore_only():
 
 def main():
     """Main setup flow."""
+    if len(sys.argv) > 1 and sys.argv[1] in ['--v2', 'v2']:
+        from alfresco_backup.v2.setup_wizard import run_v2_setup_menu
+        run_v2_setup_menu()
+        return
+
     # Check if restore-only mode requested
     if len(sys.argv) > 1 and sys.argv[1] in ['--restore', '-r', 'restore']:
         setup_restore_only()
@@ -1774,7 +1779,8 @@ def main():
     
     print_info("\nThis wizard will guide you through setting up the backup system.")
     print_info("You will be asked for permission before each step.")
-    print_info("\nFor restore-only setup (simplified), use: python3 setup.py --restore\n")
+    print_info("\nFor restore-only setup (simplified), use: python3 setup.py --restore")
+    print_info("For v2 multi-destination policies, use: python3 setup.py --v2\n")
     
     if not ask_yes_no("Start setup?"):
         print_info("Setup canceled.")
