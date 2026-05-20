@@ -47,6 +47,10 @@ def supports_insecure_no_password_flag() -> bool:
     return version >= INSECURE_NO_PASSWORD_MIN_VERSION
 
 
+def passwordless_repositories_supported() -> bool:
+    return supports_insecure_no_password_flag()
+
+
 class ResticRepository:
     """Restic operations for one destination repository."""
 
@@ -101,7 +105,30 @@ class ResticRepository:
             return ['--insecure-no-password']
         return []
 
+    def _unsupported_passwordless_result(self) -> Dict[str, Any]:
+        version = get_restic_version()
+        version_text = (
+            f"{version[0]}.{version[1]}.{version[2]}"
+            if version
+            else "unknown"
+        )
+        return {
+            'success': False,
+            'stdout': '',
+            'stderr': '',
+            'error': (
+                "This policy has encryption disabled, but installed restic "
+                f"{version_text} cannot use passwordless repositories. "
+                "Enable repository encryption with RESTIC_PASSWORD_* or upgrade "
+                "restic to 0.17+."
+            ),
+            'lock_contention': False,
+        }
+
     def _run(self, args: List[str], timeout: int = 86400) -> Dict[str, Any]:
+        if not self.policy.encryption.enabled and not passwordless_repositories_supported():
+            return self._unsupported_passwordless_result()
+
         cmd = self._base_cmd() + args + self._extra_password_flags(args)
 
         result = {
@@ -115,6 +142,7 @@ class ResticRepository:
             proc = subprocess.run(
                 cmd,
                 env=self._env,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -125,8 +153,6 @@ class ResticRepository:
                 result['success'] = True
             else:
                 combined = (proc.stderr or '') + (proc.stdout or '')
-                if UNKNOWN_INSECURE_FLAG.search(combined):
-                    return self._run_without_insecure_flag(args, timeout)
                 result['error'] = combined.strip() or f"restic exited {proc.returncode}"
                 if LOCK_PATTERN.search(combined):
                     result['lock_contention'] = True
@@ -134,34 +160,6 @@ class ResticRepository:
             result['error'] = f"restic timed out after {timeout}s"
         except FileNotFoundError:
             result['error'] = 'restic command not found'
-        return result
-
-    def _run_without_insecure_flag(self, args: List[str], timeout: int) -> Dict[str, Any]:
-        """Retry without --insecure-no-password (restic < 0.17)."""
-        cmd = self._base_cmd() + args
-        result = {
-            'success': False,
-            'stdout': '',
-            'stderr': '',
-            'error': None,
-            'lock_contention': False,
-        }
-        proc = subprocess.run(
-            cmd,
-            env=self._env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        result['stdout'] = proc.stdout or ''
-        result['stderr'] = proc.stderr or ''
-        if proc.returncode == 0:
-            result['success'] = True
-        else:
-            combined = (proc.stderr or '') + (proc.stdout or '')
-            result['error'] = combined.strip() or f"restic exited {proc.returncode}"
-            if LOCK_PATTERN.search(combined):
-                result['lock_contention'] = True
         return result
 
     def init(self) -> Dict[str, Any]:

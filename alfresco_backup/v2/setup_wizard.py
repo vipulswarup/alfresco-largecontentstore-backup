@@ -1,6 +1,7 @@
 """V2 configuration wizard (invoked from setup.py)."""
 
 import os
+import getpass
 import shutil
 import subprocess
 from pathlib import Path
@@ -88,15 +89,15 @@ def _validate_all(env_path: Path, policies_path: Path) -> None:
 
 
 def _init_repos(env_path: Path, policies_path: Path) -> None:
-    from .restic import get_restic_version, supports_insecure_no_password_flag
+    from .restic import get_restic_version, passwordless_repositories_supported
 
     version = get_restic_version()
     if version:
         print(f"  restic version: {version[0]}.{version[1]}.{version[2]}")
-    if not supports_insecure_no_password_flag():
+    if not passwordless_repositories_supported():
         print(
-            "  Note: restic < 0.17 — unencrypted repositories work without "
-            "--insecure-no-password."
+            "  Note: restic < 0.17 cannot create passwordless repositories. "
+            "Destinations must enable encryption or restic must be upgraded."
         )
 
     config = AppConfig(str(env_path), str(policies_path))
@@ -118,10 +119,11 @@ def _add_filesystem_destination(policies_path: Path) -> None:
     repo_path = input("Repository path: ").strip()
     retention = input("Retention days [15]: ").strip() or '15'
     backup_time = input("Daily backup time HH:MM [02:00]: ").strip() or '02:00'
-    enc = input("Enable encryption? [Y/n]: ").strip().lower() not in ('n', 'no')
+    enc = _ask_encryption_enabled()
     password_env = None
     if enc:
         password_env = input("RESTIC password env var name: ").strip() or f"RESTIC_PASSWORD_{name.upper().replace('-', '_')}"
+        _ensure_env_secret(Path('.env'), password_env, "Restic repository password")
     else:
         print("WARNING: Unencrypted repository is insecure-by-choice.")
 
@@ -162,8 +164,10 @@ def _add_object_storage_destination(env_path: Path, policies_path: Path) -> None
     prefix = input("Repository prefix: ").strip()
     retention = input("Retention days [180]: ").strip() or '180'
     backup_time = input("Daily backup time HH:MM [02:30]: ").strip() or '02:30'
-    enc = input("Enable encryption? [Y/n]: ").strip().lower() not in ('n', 'no')
+    enc = _ask_encryption_enabled()
     password_env = f"RESTIC_PASSWORD_{name.upper().replace('-', '_')}" if enc else None
+    if enc:
+        _ensure_env_secret(env_path, password_env, "Restic repository password")
     if not enc:
         print("WARNING: Unencrypted repository is insecure-by-choice.")
 
@@ -180,3 +184,51 @@ def _add_object_storage_destination(env_path: Path, policies_path: Path) -> None
     })
     _save_policies(policies_path, doc)
     print(f"Set {access_env}, {secret_env}, and {password_env} in .env")
+
+
+def _ask_encryption_enabled() -> bool:
+    from .restic import get_restic_version, passwordless_repositories_supported
+
+    if not passwordless_repositories_supported():
+        version = get_restic_version()
+        version_text = (
+            f"{version[0]}.{version[1]}.{version[2]}"
+            if version
+            else "unknown"
+        )
+        print(
+            f"Installed restic {version_text} requires a repository password. "
+            "Encryption will be enabled."
+        )
+        return True
+    return input("Enable encryption? [Y/n]: ").strip().lower() not in ('n', 'no')
+
+
+def _ensure_env_secret(env_path: Path, key: str, label: str) -> None:
+    if not key:
+        return
+    content = env_path.read_text(encoding='utf-8') if env_path.exists() else ''
+    for line in content.splitlines():
+        if line.startswith(f"{key}=") and line.split('=', 1)[1]:
+            return
+
+    while True:
+        value = getpass.getpass(f"{label} for {key}: ").strip()
+        if value:
+            break
+        print("Password cannot be empty.")
+
+    lines = []
+    replaced = False
+    for line in content.splitlines():
+        if line.startswith(f"{key}="):
+            lines.append(f"{key}={value}")
+            replaced = True
+        else:
+            lines.append(line)
+    if not replaced:
+        if lines and lines[-1] != '':
+            lines.append('')
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n", encoding='utf-8')
+    os.chmod(env_path, 0o600)
