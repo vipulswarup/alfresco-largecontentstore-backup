@@ -2,6 +2,7 @@
 
 import os
 import getpass
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -122,8 +123,13 @@ def _add_filesystem_destination(policies_path: Path) -> None:
     enc = _ask_encryption_enabled()
     password_env = None
     if enc:
-        password_env = input("RESTIC password env var name: ").strip() or f"RESTIC_PASSWORD_{name.upper().replace('-', '_')}"
-        _ensure_env_secret(Path('.env'), password_env, "Restic repository password")
+        password_env = _restic_password_env_name(name)
+        print(f"Restic password will be stored in .env as: {password_env}")
+        _ensure_env_secret(
+            Path('.env'),
+            password_env,
+            f"Enter restic repository password for policy '{name}'",
+        )
     else:
         print("WARNING: Unencrypted repository is insecure-by-choice.")
 
@@ -165,9 +171,14 @@ def _add_object_storage_destination(env_path: Path, policies_path: Path) -> None
     retention = input("Retention days [180]: ").strip() or '180'
     backup_time = input("Daily backup time HH:MM [02:30]: ").strip() or '02:30'
     enc = _ask_encryption_enabled()
-    password_env = f"RESTIC_PASSWORD_{name.upper().replace('-', '_')}" if enc else None
+    password_env = _restic_password_env_name(name) if enc else None
     if enc:
-        _ensure_env_secret(env_path, password_env, "Restic repository password")
+        print(f"Restic password will be stored in .env as: {password_env}")
+        _ensure_env_secret(
+            env_path,
+            password_env,
+            f"Enter restic repository password for policy '{name}'",
+        )
     if not enc:
         print("WARNING: Unencrypted repository is insecure-by-choice.")
 
@@ -184,6 +195,13 @@ def _add_object_storage_destination(env_path: Path, policies_path: Path) -> None
     })
     _save_policies(policies_path, doc)
     print(f"Set {access_env}, {secret_env}, and {password_env} in .env")
+
+
+def _restic_password_env_name(policy_name: str) -> str:
+    suffix = re.sub(r'[^A-Za-z0-9]+', '_', policy_name).strip('_').upper()
+    if not suffix:
+        suffix = 'POLICY'
+    return f"RESTIC_PASSWORD_{suffix}"
 
 
 def _ask_encryption_enabled() -> bool:
@@ -204,7 +222,7 @@ def _ask_encryption_enabled() -> bool:
     return input("Enable encryption? [Y/n]: ").strip().lower() not in ('n', 'no')
 
 
-def _ensure_env_secret(env_path: Path, key: str, label: str) -> None:
+def _ensure_env_secret(env_path: Path, key: str, prompt: str) -> None:
     if not key:
         return
     content = env_path.read_text(encoding='utf-8') if env_path.exists() else ''
@@ -213,7 +231,7 @@ def _ensure_env_secret(env_path: Path, key: str, label: str) -> None:
             return
 
     while True:
-        value = getpass.getpass(f"{label} for {key}: ").strip()
+        value = getpass.getpass(f"{prompt}: ").strip()
         if value:
             break
         print("Password cannot be empty.")

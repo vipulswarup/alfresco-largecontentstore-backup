@@ -1,6 +1,7 @@
 """Load and validate .env + backup-policies.yml for v2."""
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -20,6 +21,15 @@ from .schedule import validate_schedule_fields
 
 POLICIES_FILENAME = 'backup-policies.yml'
 CONFIG_VERSION = 1
+ENV_VAR_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def _validate_env_var_name(value: str, context: str) -> None:
+    if not value or not ENV_VAR_PATTERN.match(value):
+        raise ValueError(
+            f"{context}: invalid environment variable name '{value}'. "
+            "Use letters, numbers, and underscores only, and do not start with a number."
+        )
 
 
 class AppConfig:
@@ -82,6 +92,8 @@ class AppConfig:
             names.add(name)
             if p.get('type') != 'object_storage':
                 raise ValueError(f"Profile {name}: only object_storage type supported")
+            _validate_env_var_name(p['access_key_env'], f"Profile {name} access_key_env")
+            _validate_env_var_name(p['secret_key_env'], f"Profile {name} secret_key_env")
             self.credential_profiles.append(
                 CredentialProfile(
                     name=name,
@@ -172,6 +184,10 @@ class AppConfig:
                     f"Policy {policy.name}: encryption enabled requires password_env"
                 )
             if policy.encryption.enabled:
+                _validate_env_var_name(
+                    policy.encryption.password_env,
+                    f"Policy {policy.name} password_env",
+                )
                 if not os.getenv(policy.encryption.password_env):
                     raise ValueError(
                         f"Policy {policy.name}: missing {policy.encryption.password_env}"
