@@ -106,6 +106,13 @@ def run_backup(config: AppConfig, force: bool = False) -> RunResult:
             run_result.finished_at = datetime.now().isoformat()
             send_run_report(config, run_result)
 
+            if run_result.status != 'success':
+                for dest in run_result.destinations:
+                    if not dest.success:
+                        logger.error(
+                            f"Destination {dest.policy_name} failed: {dest.error}"
+                        )
+
             if run_result.status == 'failure':
                 sys.exit(1)
             if run_result.status == 'partial_success':

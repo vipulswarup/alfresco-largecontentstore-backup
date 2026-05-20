@@ -4,8 +4,10 @@ import json
 import logging
 import os
 import re
+import subprocess
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .app_config import AppConfig
 from .models import BackupPolicy, CredentialProfile
@@ -13,6 +15,36 @@ from .models import BackupPolicy, CredentialProfile
 logger = logging.getLogger(__name__)
 
 LOCK_PATTERN = re.compile(r'lock|locked|repository is already locked', re.I)
+VERSION_PATTERN = re.compile(r'restic\s+(\d+)\.(\d+)\.(\d+)', re.I)
+UNKNOWN_INSECURE_FLAG = re.compile(r'unknown flag: --insecure-no-password', re.I)
+
+# --insecure-no-password exists from restic 0.17.0 (Ubuntu apt often ships older).
+INSECURE_NO_PASSWORD_MIN_VERSION = (0, 17, 0)
+
+
+@lru_cache(maxsize=1)
+def get_restic_version() -> Optional[Tuple[int, int, int]]:
+    try:
+        proc = subprocess.run(
+            ['restic', 'version'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        text = (proc.stdout or '') + (proc.stderr or '')
+        match = VERSION_PATTERN.search(text)
+        if match:
+            return int(match.group(1)), int(match.group(2)), int(match.group(3))
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
+def supports_insecure_no_password_flag() -> bool:
+    version = get_restic_version()
+    if version is None:
+        return False
+    return version >= INSECURE_NO_PASSWORD_MIN_VERSION
 
 
 class ResticRepository:
@@ -45,8 +77,8 @@ class ResticRepository:
     def _build_env(self) -> Dict[str, str]:
         env = os.environ.copy()
         env['RESTIC_REPOSITORY'] = self.repository
-        password = self.policy.restic_password({k: os.getenv(k, '') for k in os.environ})
         if self.policy.encryption.enabled:
+            password = self.policy.restic_password({k: os.getenv(k, '') for k in os.environ})
             if password:
                 env['RESTIC_PASSWORD'] = password
         else:
@@ -61,12 +93,16 @@ class ResticRepository:
     def _base_cmd(self) -> List[str]:
         return ['restic', '-r', self.repository]
 
+    def _extra_password_flags(self, args: List[str]) -> List[str]:
+        """Flags for repositories without restic encryption/password."""
+        if self.policy.encryption.enabled:
+            return []
+        if supports_insecure_no_password_flag():
+            return ['--insecure-no-password']
+        return []
+
     def _run(self, args: List[str], timeout: int = 86400) -> Dict[str, Any]:
-        import subprocess
-        cmd = self._base_cmd() + args
-        if not self.policy.encryption.enabled:
-            if 'backup' in args or args == ['init']:
-                cmd.append('--insecure-no-password')
+        cmd = self._base_cmd() + args + self._extra_password_flags(args)
 
         result = {
             'success': False,
@@ -89,6 +125,8 @@ class ResticRepository:
                 result['success'] = True
             else:
                 combined = (proc.stderr or '') + (proc.stdout or '')
+                if UNKNOWN_INSECURE_FLAG.search(combined):
+                    return self._run_without_insecure_flag(args, timeout)
                 result['error'] = combined.strip() or f"restic exited {proc.returncode}"
                 if LOCK_PATTERN.search(combined):
                     result['lock_contention'] = True
@@ -96,6 +134,34 @@ class ResticRepository:
             result['error'] = f"restic timed out after {timeout}s"
         except FileNotFoundError:
             result['error'] = 'restic command not found'
+        return result
+
+    def _run_without_insecure_flag(self, args: List[str], timeout: int) -> Dict[str, Any]:
+        """Retry without --insecure-no-password (restic < 0.17)."""
+        cmd = self._base_cmd() + args
+        result = {
+            'success': False,
+            'stdout': '',
+            'stderr': '',
+            'error': None,
+            'lock_contention': False,
+        }
+        proc = subprocess.run(
+            cmd,
+            env=self._env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        result['stdout'] = proc.stdout or ''
+        result['stderr'] = proc.stderr or ''
+        if proc.returncode == 0:
+            result['success'] = True
+        else:
+            combined = (proc.stderr or '') + (proc.stdout or '')
+            result['error'] = combined.strip() or f"restic exited {proc.returncode}"
+            if LOCK_PATTERN.search(combined):
+                result['lock_contention'] = True
         return result
 
     def init(self) -> Dict[str, Any]:
@@ -148,11 +214,10 @@ class ResticRepository:
 
     def forget_prune(self, retention_days: int) -> Dict[str, Any]:
         keep = f"{retention_days}d"
-        forget = self._run(
+        return self._run(
             ['forget', '--keep-within', keep, '--tag', 'kind:complete-set', '--prune'],
             timeout=86400,
         )
-        return forget
 
     def find_snapshot_by_tag(self, tag: str) -> List[Dict[str, Any]]:
         r = self.snapshots_json()

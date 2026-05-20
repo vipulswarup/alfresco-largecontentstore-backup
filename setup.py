@@ -109,13 +109,20 @@ def ask_yes_no(question: str, default: bool = True) -> bool:
             return False
         print_warning("Please answer 'y' or 'n'")
 
-def run_command(cmd: list, capture_output: bool = False, check: bool = True) -> Optional[subprocess.CompletedProcess]:
+def run_command(
+    cmd: list,
+    capture_output: bool = False,
+    check: bool = True,
+    quiet: bool = False,
+) -> Optional[subprocess.CompletedProcess]:
     """Run a shell command with consistent logging."""
-    print_info(f"Running command: {' '.join(cmd)}")
+    if not quiet:
+        print_info(f"Running command: {' '.join(cmd)}")
     try:
         result = subprocess.run(cmd, capture_output=capture_output, text=True, check=False)
         if result.returncode != 0:
-            print_error(f"Command exited with {result.returncode}")
+            if not quiet:
+                print_error(f"Command exited with {result.returncode}")
             if capture_output:
                 if result.stdout:
                     print_info(f"STDOUT:\n{result.stdout.strip()}")
@@ -2013,7 +2020,22 @@ def run_backup_now() -> None:
         print_error("Virtual environment missing. Run Guided setup first.")
         return
     print_info("Running all enabled destinations immediately...")
-    run_command([str(py), '-c', 'from alfresco_backup.v2.__main__ import main; main(force_all_destinations=True)'])
+    result = run_command(
+        [str(py), '-c', 'from alfresco_backup.v2.__main__ import main; main(force_all_destinations=True)'],
+        check=False,
+        quiet=True,
+    )
+    if result and result.returncode == 0:
+        print_success("Backup run completed")
+    elif result and result.returncode == 2:
+        print_warning("Backup completed with partial success (see log above)")
+    elif result:
+        print_error(f"Backup failed (exit {result.returncode}). See log above.")
+    log_file = Path('/var/tmp/alfresco-backup/logs')
+    if log_file.exists():
+        latest = sorted(log_file.glob('backup-*.log'))
+        if latest:
+            print_info(f"Log file: {latest[-1]}")
 
 
 def run_main_menu() -> None:

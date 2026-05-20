@@ -88,15 +88,28 @@ def _validate_all(env_path: Path, policies_path: Path) -> None:
 
 
 def _init_repos(env_path: Path, policies_path: Path) -> None:
+    from .restic import get_restic_version, supports_insecure_no_password_flag
+
+    version = get_restic_version()
+    if version:
+        print(f"  restic version: {version[0]}.{version[1]}.{version[2]}")
+    if not supports_insecure_no_password_flag():
+        print(
+            "  Note: restic < 0.17 — unencrypted repositories work without "
+            "--insecure-no-password."
+        )
+
     config = AppConfig(str(env_path), str(policies_path))
     for policy in config.enabled_policies():
         profile = config.get_profile(policy.credential_profile) if policy.credential_profile else None
         repo = ResticRepository(policy, config, profile)
         r = repo.init()
-        if r['success'] or 'already exists' in (r.get('error') or '').lower():
-            print(f"  {policy.name}: initialized")
+        err = (r.get('error') or '').lower()
+        if r['success'] or 'already exists' in err or 'already initialized' in err:
+            print(f"  {policy.name}: OK")
         else:
-            print(f"  {policy.name}: {r.get('error')}")
+            print(f"  {policy.name}: FAILED")
+            print(f"    {r.get('error', 'unknown error')}")
 
 
 def _add_filesystem_destination(policies_path: Path) -> None:
