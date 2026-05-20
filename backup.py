@@ -63,9 +63,9 @@ if __name__ == '__main__':
         if not venv_path.exists():
             print("\nNo virtual environment found. Run setup first:")
             print("  python3 setup.py")
-            print("\nThis will create the virtual environment and install dependencies.")
-            print("\nFor restore-only setup (simplified), use:")
-            print("  python3 setup.py --restore")
+            print("  Menu: 1. Install Python dependencies (venv)")
+            print("\nDo not use system pip (PEP 668). Use the setup menu or:")
+            print("  python3 -m venv venv && venv/bin/pip install -r requirements.txt")
         else:
             print("\nVirtual environment exists but dependencies may not be installed.")
             print("\nPlease activate the virtual environment first:")
@@ -73,9 +73,9 @@ if __name__ == '__main__':
             print("  python backup.py")
             print("\nOr run the backup script using the venv Python directly:")
             print("  venv/bin/python backup.py")
-            print("\nIf dependencies are missing, install them:")
-            print("  source venv/bin/activate")
-            print("  pip install -r requirements.txt")
+            print("\nIf dependencies are missing:")
+            print("  python3 setup.py  -> menu 1. Install Python dependencies")
+            print("  or: venv/bin/pip install -r requirements.txt")
         
         sys.exit(1)
     

@@ -13,6 +13,9 @@ import shutil
 from pathlib import Path
 from typing import Optional, Tuple
 
+# Allow imports when setup.py is run from the repo root (not installed as a package).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 class Colors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
@@ -165,9 +168,9 @@ def check_prerequisites(for_restore=False):
         # For backup setup, need all tools
         required_tools = {
             'python3': 'Python 3',
-            'pg_dump': 'PostgreSQL client tools',
-            'rsync': 'rsync',
-            'sudo': 'sudo'
+            'pg_dump': 'PostgreSQL client tools (pg_dump)',
+            'restic': 'restic',
+            'sudo': 'sudo',
         }
     
     missing_tools = []
@@ -184,7 +187,7 @@ def check_prerequisites(for_restore=False):
         if not for_restore:
             print_info("\nInstall them with:")
             print("  sudo apt-get update")
-            print("  sudo apt-get install -y python3 python3-pip python3-venv postgresql-client rsync")
+            print("  sudo apt-get install -y python3 python3-venv python3-full postgresql-client restic")
         else:
             print_info("\nInstall Python 3 with:")
             print("  sudo apt-get update")
@@ -1378,49 +1381,47 @@ def verify_installation():
         print_success(".env file exists")
         config = load_env_config()
         
-        # Verify required settings
-        s3_enabled = bool(config.get('S3_BUCKET'))
-        required_settings = ['ALF_BASE_DIR', 'PGUSER', 'PGHOST', 'PGPORT']
-        if not s3_enabled:
-            required_settings.append('BACKUP_DIR')
+        required_settings = ['ALF_BASE_DIR', 'PGUSER', 'PGHOST', 'PGPORT', 'PGPASSWORD']
         missing = [s for s in required_settings if not config.get(s)]
         if missing:
             print_error(f"Missing required settings in .env: {', '.join(missing)}")
             checks.append(False)
         else:
             print_success("All required settings present in .env")
-            if s3_enabled:
-                print_info("  S3 mode detected (BACKUP_DIR not required)")
             checks.append(True)
     else:
         print_error(".env file missing")
         checks.append(False)
         config = {}
     
-    # Check backup directories
-    print_info("\n[2/6] Checking backup directories...")
-    s3_enabled = bool(config.get('S3_BUCKET'))
-    if s3_enabled:
-        print_info("S3 mode enabled - skipping local backup directory check")
-        print_info("  Backups will be stored directly to S3")
+    print_info("\n[2/6] Checking backup-policies.yml (restic destinations)...")
+    policies_file = Path('backup-policies.yml')
+    if policies_file.exists():
+        print_success("backup-policies.yml exists")
+        try:
+            import yaml
+            with open(policies_file) as f:
+                doc = yaml.safe_load(f) or {}
+            count = len(doc.get('backup_policies', []))
+            print_info(f"  {count} destination(s) configured")
+            checks.append(count > 0)
+            if count == 0:
+                print_error("  No destinations; use setup menu 3, 4, or 5")
+        except Exception as e:
+            print_error(f"  Invalid YAML: {e}")
+            checks.append(False)
+    else:
+        print_error("backup-policies.yml missing (use setup menu 3 or 4)")
+        checks.append(False)
+
+    print_info("\n[2b/6] Checking restic...")
+    from alfresco_backup.v2.setup_wizard import check_restic_installed
+    if check_restic_installed():
+        print_success("restic is installed")
         checks.append(True)
     else:
-        backup_dir = config.get('BACKUP_DIR')
-        if backup_dir and Path(backup_dir).exists():
-            print_success(f"Backup directory exists: {backup_dir}")
-            
-            # Check subdirectories
-            for subdir in ['postgres', 'contentstore']:
-                path = Path(backup_dir) / subdir
-                if path.exists():
-                    print_success(f"  {subdir}/ exists")
-                else:
-                    print_error(f"  {subdir}/ missing")
-                    checks.append(False)
-            checks.append(True)
-        else:
-            print_error(f"Backup directory missing: {backup_dir}")
-            checks.append(False)
+        print_error("restic not found (setup menu 2)")
+        checks.append(False)
     
     # Check virtual environment
     print_info("\n[3/6] Checking Python virtual environment...")
@@ -1507,8 +1508,8 @@ def verify_installation():
         print_success("\n✓ All critical checks passed!")
         print_info("\nYour backup system is ready to use.")
         print_info("\nNext step - Test the backup:")
-        print_info("  source venv/bin/activate")
-        print_info("  python backup.py")
+        print_info("  venv/bin/python backup.py")
+        print_info("  or setup menu 9. Run backup now")
         return True
     else:
         print_error("\n✗ Some critical checks failed. Please review the errors above.")
@@ -1729,10 +1730,9 @@ def setup_restore_only():
         print_info("Setup canceled.")
         sys.exit(0)
     
-    # Create virtual environment
-    print_header("Create Virtual Environment")
-    if not create_virtual_environment():
-        print_error("Failed to create virtual environment")
+    print_header("Install Python Dependencies")
+    if not install_python_dependencies():
+        print_error("Failed to install Python dependencies in venv")
         sys.exit(1)
     
     # Create minimal .env file with PostgreSQL credentials
@@ -1753,63 +1753,244 @@ def setup_restore_only():
     print_info("If .env is missing or incomplete, it will prompt for missing values.")
     print_info("\nSee docs/operations/restore-runbook.md for detailed restore procedures.")
 
-def main():
-    """Main setup flow."""
-    if len(sys.argv) > 1 and sys.argv[1] in ['--v2', 'v2']:
-        from alfresco_backup.v2.setup_wizard import run_v2_setup_menu
-        run_v2_setup_menu()
-        return
+def venv_python() -> Path:
+    return Path.cwd() / 'venv' / 'bin' / 'python'
 
-    # Check if restore-only mode requested
-    if len(sys.argv) > 1 and sys.argv[1] in ['--restore', '-r', 'restore']:
-        setup_restore_only()
-        return
-    
-    print_header("Alfresco Large Content Store Backup - Setup Wizard")
-    
-    real_user, real_uid, real_gid = get_real_user()
+
+def venv_pip() -> Path:
+    return Path.cwd() / 'venv' / 'bin' / 'pip'
+
+
+def install_python_dependencies() -> bool:
+    """Install requirements into project venv (avoids PEP 668 system pip errors)."""
+    print_header("Install Python Dependencies (virtual environment)")
+    print_warning(
+        "Do not run: pip install -r requirements.txt\n"
+        "On Ubuntu/Debian the system Python is externally managed.\n"
+        "This installer uses: venv/bin/pip"
+    )
+    if not create_virtual_environment():
+        return False
+    pip = venv_pip()
+    if not pip.exists():
+        print_error(f"venv pip not found: {pip}")
+        return False
+    real_user, _, _ = get_real_user()
     running_as_root = is_running_as_root()
-    
     if running_as_root:
-        print_info(f"Running with sudo privileges (real user: {real_user})")
-        print_info("All files and directories will be owned by the real user.")
+        result = run_command(['sudo', '-u', real_user, str(pip), 'install', '-r', 'requirements.txt'], check=False)
     else:
-        print_info(f"Running as user: {real_user}")
-        print_info("You may be prompted for sudo password when creating directories.")
-    
-    print_info("\nThis wizard will guide you through setting up the backup system.")
-    print_info("You will be asked for permission before each step.")
-    print_info("\nFor restore-only setup (simplified), use: python3 setup.py --restore")
-    print_info("For v2 multi-destination policies, use: python3 setup.py --v2\n")
-    
-    if not ask_yes_no("Start setup?"):
-        print_info("Setup canceled.")
-        sys.exit(0)
-    
-    # Step 1: Check prerequisites
-    if not check_prerequisites():
-        print_info("Setup canceled.")
-        sys.exit(0)
-    
-    # Step 2: Create .env file
-    if not create_env_file():
-        print_warning("Setup cannot continue without .env file")
-        sys.exit(1)
-    
-    # Step 3: Create directories
-    create_directories()
-    
-    # Step 4: Create virtual environment
-    create_virtual_environment()
-    
-    # Step 5: Configure cron job
+        result = run_command([str(pip), 'install', '-r', 'requirements.txt'], check=False)
+    if result and result.returncode == 0:
+        print_success("Dependencies installed in venv")
+        print_info(f"Run backups with: {venv_python()} backup.py")
+        return True
+    print_error("Failed to install dependencies")
+    return False
+
+
+def ensure_restic() -> bool:
+    from alfresco_backup.v2.setup_wizard import check_restic_installed, install_restic_ubuntu
+    if check_restic_installed():
+        print_success("restic is installed")
+        return True
+    print_warning("restic is not installed")
+    if ask_yes_no("Install restic via apt?", default=True):
+        if install_restic_ubuntu(is_running_as_root()):
+            print_success("restic installed")
+            return True
+    return False
+
+
+def create_base_env_file() -> bool:
+    """Create .env with PostgreSQL, Alfresco paths, and email (no legacy backup dirs)."""
+    print_header("Host and Database Configuration (.env)")
+    env_file = Path('.env')
+    if env_file.exists():
+        print_info(f".env exists at {env_file.absolute()}")
+        if not ask_yes_no("Reconfigure .env?", default=False):
+            return True
+
+    print_info("\n--- Alfresco Base Directory ---")
+    while True:
+        alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory path: {Colors.ENDC}").strip()
+        if alf_base_dir and Path(alf_base_dir).exists():
+            break
+        print_error(f"Directory does not exist: {alf_base_dir}")
+
+    print_info("\n--- Database Configuration ---")
+    db_settings = detect_db_settings_from_alfresco(alf_base_dir)
+    if db_settings:
+        print_success("Auto-detected database settings from alfresco-global.properties")
+        use_detected = ask_yes_no("Use detected settings?", default=True)
+        if use_detected:
+            pg_host = db_settings.get('host', 'localhost')
+            pg_port = db_settings.get('port', '5432')
+            pg_user = db_settings.get('user', 'alfresco')
+            pg_password = db_settings.get('password', '')
+            pg_database = db_settings.get('database', 'postgres')
+        else:
+            pg_host = input(f"{Colors.OKCYAN}PostgreSQL host [localhost]: {Colors.ENDC}").strip() or 'localhost'
+            pg_port = input(f"{Colors.OKCYAN}PostgreSQL port [5432]: {Colors.ENDC}").strip() or '5432'
+            pg_user = input(f"{Colors.OKCYAN}PostgreSQL user [alfresco]: {Colors.ENDC}").strip() or 'alfresco'
+            pg_password = input(f"{Colors.OKCYAN}PostgreSQL password: {Colors.ENDC}").strip()
+            pg_database = input(f"{Colors.OKCYAN}PostgreSQL database [postgres]: {Colors.ENDC}").strip() or 'postgres'
+    else:
+        pg_host = input(f"{Colors.OKCYAN}PostgreSQL host [localhost]: {Colors.ENDC}").strip() or 'localhost'
+        pg_port = input(f"{Colors.OKCYAN}PostgreSQL port [5432]: {Colors.ENDC}").strip() or '5432'
+        pg_user = input(f"{Colors.OKCYAN}PostgreSQL user [alfresco]: {Colors.ENDC}").strip() or 'alfresco'
+        pg_password = input(f"{Colors.OKCYAN}PostgreSQL password: {Colors.ENDC}").strip()
+        pg_database = input(f"{Colors.OKCYAN}PostgreSQL database [postgres]: {Colors.ENDC}").strip() or 'postgres'
+
+    pg_superuser = input(
+        f"{Colors.OKCYAN}PostgreSQL superuser [{pg_user}]: {Colors.ENDC}"
+    ).strip() or pg_user
+    customer_name = input(f"{Colors.OKCYAN}Customer name (optional): {Colors.ENDC}").strip()
+
+    print_info("\n--- Email Alerts (optional) ---")
+    configure_email = ask_yes_no("Configure email alerts?", default=False)
+    if configure_email:
+        email_alert_mode = input(f"{Colors.OKCYAN}Mode (both/failure_only/none) [failure_only]: {Colors.ENDC}").strip() or 'failure_only'
+        smtp_host = input(f"{Colors.OKCYAN}SMTP host [smtp.gmail.com]: {Colors.ENDC}").strip() or 'smtp.gmail.com'
+        smtp_port = input(f"{Colors.OKCYAN}SMTP port [587]: {Colors.ENDC}").strip() or '587'
+        smtp_user = input(f"{Colors.OKCYAN}SMTP username: {Colors.ENDC}").strip()
+        smtp_password = input(f"{Colors.OKCYAN}SMTP password: {Colors.ENDC}").strip()
+        alert_email = input(f"{Colors.OKCYAN}Alert recipient: {Colors.ENDC}").strip()
+        alert_from = input(f"{Colors.OKCYAN}From address [{smtp_user}]: {Colors.ENDC}").strip() or smtp_user
+    else:
+        email_alert_mode = 'failure_only'
+        smtp_host = smtp_port = smtp_user = smtp_password = alert_email = alert_from = ''
+
+    env_content = f"""# Database Configuration
+PGHOST={pg_host}
+PGPORT={pg_port}
+PGUSER={pg_user}
+PGPASSWORD={pg_password}
+PGDATABASE={pg_database}
+PGSUPERUSER={pg_superuser}
+
+# Alfresco paths
+ALF_BASE_DIR={alf_base_dir}
+
+# Customer name (optional, email subject)
+CUSTOMER_NAME={customer_name}
+
+# Email Alerts
+EMAIL_ALERT_MODE={email_alert_mode}
+SMTP_HOST={smtp_host}
+SMTP_PORT={smtp_port}
+SMTP_USER={smtp_user}
+SMTP_PASSWORD={smtp_password}
+ALERT_EMAIL={alert_email}
+ALERT_FROM={alert_from}
+
+# Restic / object storage secrets go here (see backup-policies.yml *_env names)
+"""
+    with open(env_file, 'w') as f:
+        f.write(env_content)
+    if is_running_as_root():
+        real_user, real_uid, real_gid = get_real_user()
+        os.chown(env_file, real_uid, real_gid)
+    os.chmod(env_file, 0o600)
+    print_success(f".env written to {env_file.absolute()}")
+    return True
+
+
+def setup_single_destination() -> None:
+    print_header("Initial Setup: Single Restic Destination")
+    if not check_prerequisites(for_restore=False):
+        return
+    if not ensure_restic():
+        return
+    if not install_python_dependencies():
+        return
+    if not create_base_env_file():
+        return
+    from alfresco_backup.v2.setup_menu import create_single_destination_policy
+    create_single_destination_policy(Path('backup-policies.yml'), Path('.env'))
     configure_cron_job()
-    
-    # Step 6: Verify
     verify_installation()
-    
-    print_header("Setup Complete!")
-    print_info("See README.md for detailed documentation.")
+
+
+def setup_multiple_destinations() -> None:
+    print_header("Initial Setup: Multiple Restic Destinations")
+    if not check_prerequisites(for_restore=False):
+        return
+    if not ensure_restic():
+        return
+    if not install_python_dependencies():
+        return
+    if not create_base_env_file():
+        return
+    from alfresco_backup.v2.setup_menu import create_multiple_destinations_policy
+    create_multiple_destinations_policy(Path('backup-policies.yml'), Path('.env'))
+    configure_cron_job()
+    verify_installation()
+
+
+def run_backup_now() -> None:
+    print_header("Run Backup Now")
+    py = venv_python()
+    if not py.exists():
+        print_error("Virtual environment missing. Use menu: Install Python dependencies.")
+        return
+    print_info("Running all enabled destinations immediately...")
+    run_command([str(py), '-c', 'from alfresco_backup.v2.__main__ import main; main(force_all_destinations=True)'])
+
+
+def run_main_menu() -> None:
+    print_header("Alfresco Backup Setup")
+    real_user, _, _ = get_real_user()
+    print_info(f"User: {real_user}")
+    print_info("Backups use restic only (see backup-policies.yml for destinations).")
+    print_warning("Install Python packages via this menu, not system pip (PEP 668).")
+
+    while True:
+        print("\nMain menu:")
+        print("  1. Install Python dependencies (venv)")
+        print("  2. Install / check restic")
+        print("  3. Initial setup: single backup destination")
+        print("  4. Initial setup: multiple backup destinations")
+        print("  5. Manage backup destinations")
+        print("  6. Configure host / database (.env)")
+        print("  7. Restore-only setup (venv + .env)")
+        print("  8. Configure automated backup (cron)")
+        print("  9. Run backup now (all enabled destinations)")
+        print(" 10. Verify installation")
+        print("  0. Exit")
+        choice = input(f"{Colors.OKCYAN}Choice: {Colors.ENDC}").strip()
+
+        if choice == '0':
+            print_info("Goodbye.")
+            break
+        elif choice == '1':
+            install_python_dependencies()
+        elif choice == '2':
+            ensure_restic()
+        elif choice == '3':
+            setup_single_destination()
+        elif choice == '4':
+            setup_multiple_destinations()
+        elif choice == '5':
+            from alfresco_backup.v2.setup_menu import manage_destinations_menu
+            manage_destinations_menu()
+        elif choice == '6':
+            create_base_env_file()
+        elif choice == '7':
+            setup_restore_only()
+        elif choice == '8':
+            configure_cron_job()
+        elif choice == '9':
+            run_backup_now()
+        elif choice == '10':
+            verify_installation()
+        else:
+            print_warning("Invalid choice")
+
+
+def main():
+    """Interactive setup (no command-line flags)."""
+    run_main_menu()
 
 def ensure_replication_privilege_for_alfresco(
     pg_data_dir: str, psql_bin: str, pg_ctl_bin: str

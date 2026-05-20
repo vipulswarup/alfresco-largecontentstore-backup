@@ -25,55 +25,6 @@ def install_restic_ubuntu(use_sudo: bool) -> bool:
     return check_restic_installed()
 
 
-def run_v2_setup_menu() -> None:
-    print("\n" + "=" * 80)
-    print("  V2 Multi-Destination Backup Configuration")
-    print("=" * 80)
-
-    if not check_restic_installed():
-        print("restic is not installed.")
-        if input("Install restic via apt? [Y/n]: ").strip().lower() not in ('n', 'no'):
-            use_sudo = os.geteuid() != 0
-            if not install_restic_ubuntu(use_sudo):
-                print("Failed to install restic. Install manually and retry.")
-                return
-        else:
-            return
-
-    env_path = Path('.env')
-    policies_path = Path(POLICIES_FILENAME)
-
-    if needs_migration(env_path, policies_path):
-        created, msg = migrate_legacy_env(env_path, policies_path)
-        print(msg)
-        if created:
-            print("Review backup-policies.yml and set RESTIC_PASSWORD_* / OBJSTORE_* secrets in .env")
-
-    while True:
-        print("\nOptions:")
-        print("  1. Show current policies")
-        print("  2. Validate all destinations")
-        print("  3. Initialize restic repositories")
-        print("  4. Add filesystem destination")
-        print("  5. Add object storage destination")
-        print("  6. Exit")
-        choice = input("Choice: ").strip()
-        if choice == '6':
-            break
-        if choice == '1':
-            _show_policies(policies_path)
-        elif choice == '2':
-            _validate_all(env_path, policies_path)
-        elif choice == '3':
-            _init_repos(env_path, policies_path)
-        elif choice == '4':
-            _add_filesystem_destination(policies_path)
-        elif choice == '5':
-            _add_object_storage_destination(env_path, policies_path)
-        else:
-            print("Invalid choice")
-
-
 def _load_policies(path: Path) -> dict:
     if not path.exists():
         return {

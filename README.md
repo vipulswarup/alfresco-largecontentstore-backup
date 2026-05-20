@@ -12,7 +12,7 @@ Production-grade backup and restore system for Alfresco deployments, designed to
 ```bash
 # On Debian/Ubuntu:
 sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-venv postgresql-client rsync rclone
+sudo apt-get install -y python3 python3-venv python3-full postgresql-client restic
 
 # On RHEL/CentOS:
 sudo yum install python3 python3-pip postgresql rsync rclone
@@ -22,36 +22,25 @@ sudo yum install python3 python3-pip postgresql rsync rclone
 
 ### Installation
 
-**For Backup System (full setup):**
+**Setup (interactive menu, no command-line flags):**
 ```bash
 git clone <repository-url>
 cd alfresco-largecontentstore-backup
-sudo python3 setup.py
+python3 setup.py
 ```
 
-The setup wizard will guide you through configuration and create a virtual environment.
+Use the menu to:
+1. Install Python dependencies into `venv/` (do **not** use system `pip`; Ubuntu PEP 668 blocks it)
+2. Install/check **restic**
+3. Initial setup for **one** or **multiple** backup destinations (`backup-policies.yml`)
 
-**For Restore Only (no backup configuration needed):**
-```bash
-git clone <repository-url>
-cd alfresco-largecontentstore-backup
-python3 setup.py --restore
-```
-
-**Note:** If you get an error about `python3-venv` not being available, install it first:
-```bash
-sudo apt install python3-venv
-# Or for specific Python version:
-sudo apt install python3.12-venv
-```
-
-Then run `python3 setup.py --restore` again.
+**Note:** If venv creation fails, install: `sudo apt install python3-venv python3-full`
 
 ### Running Backups
 
 **Manual:**
 ```bash
-python3 backup.py
+venv/bin/python backup.py
 ```
 
 **Automated (via cron):**
@@ -59,16 +48,11 @@ Setup wizard configures daily backups at 2 AM. Check cron with `crontab -l`.
 
 ### Running Restores
 
-**First-time setup (if virtual environment doesn't exist):**
-```bash
-python3 setup.py --restore
-```
-
-This creates the virtual environment and installs dependencies without requiring backup configuration.
+**First-time setup:** `python3 setup.py` → menu **7. Restore-only setup**
 
 **Then run restore:**
 ```bash
-python3 restore.py
+venv/bin/python restore.py
 ```
 
 Select restore mode and follow prompts. The restore script will prompt you to clear Solr4 indexes after restore (recommended). Alfresco will rebuild indexes automatically on next startup.

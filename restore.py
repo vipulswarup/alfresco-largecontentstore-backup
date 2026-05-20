@@ -61,11 +61,10 @@ if __name__ == '__main__':
         print("ERROR: Virtual environment not found or not activated.")
         
         if not venv_path.exists():
-            print("\nNo virtual environment found. Run restore setup:")
-            print("  python3 setup.py --restore")
-            print("\nThis will create the virtual environment and install dependencies.")
-            print("\nFor full backup setup (including .env configuration), use:")
+            print("\nNo virtual environment found. Run:")
             print("  python3 setup.py")
+            print("  Menu: 7. Restore-only setup  or  1. Install Python dependencies")
+            print("\nDo not use system pip. Use venv/bin/pip via the setup menu.")
         else:
             print("\nVirtual environment exists but dependencies may not be installed.")
             print("\nPlease activate the virtual environment first:")
@@ -73,9 +72,8 @@ if __name__ == '__main__':
             print("  python restore.py")
             print("\nOr run the restore script using the venv Python directly:")
             print("  venv/bin/python restore.py")
-            print("\nIf dependencies are missing, install them:")
-            print("  source venv/bin/activate")
-            print("  pip install -r requirements.txt")
+            print("\nIf dependencies are missing:")
+            print("  python3 setup.py  -> menu 1. Install Python dependencies")
         
         sys.exit(1)
     
