@@ -125,7 +125,7 @@ class ResticRepository:
             'lock_contention': False,
         }
 
-    def _run(self, args: List[str], timeout: int = 86400) -> Dict[str, Any]:
+    def _run(self, args: List[str], timeout: Optional[int] = 86400) -> Dict[str, Any]:
         if not self.policy.encryption.enabled and not passwordless_repositories_supported():
             return self._unsupported_passwordless_result()
 
@@ -158,6 +158,8 @@ class ResticRepository:
                     result['lock_contention'] = True
         except subprocess.TimeoutExpired:
             result['error'] = f"restic timed out after {timeout}s"
+        except OverflowError as e:
+            result['error'] = f"Invalid restic timeout value {timeout}: {e}"
         except FileNotFoundError:
             result['error'] = 'restic command not found'
         return result
@@ -187,7 +189,7 @@ class ResticRepository:
         args = ['backup', '--json'] + [str(p) for p in paths]
         for tag in tags:
             args.extend(['--tag', tag])
-        r = self._run(args, timeout=86400 * 48)
+        r = self._run(args, timeout=None)
         if r['success'] and r['stdout']:
             try:
                 summary = json.loads(r['stdout'].strip().split('\n')[-1])
@@ -208,7 +210,7 @@ class ResticRepository:
         if include_paths:
             for p in include_paths:
                 args.extend(['--include', p])
-        return self._run(args, timeout=86400 * 48)
+        return self._run(args, timeout=None)
 
     def forget_prune(self, retention_days: int) -> Dict[str, Any]:
         keep = f"{retention_days}d"
