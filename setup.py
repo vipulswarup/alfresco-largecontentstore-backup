@@ -16,6 +16,35 @@ from typing import Optional, Tuple
 # Allow imports when setup.py is run from the repo root (not installed as a package).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+
+def add_venv_site_packages() -> bool:
+    """Make dependencies from ./venv importable while setup.py keeps running."""
+    venv_path = Path(__file__).resolve().parent / 'venv'
+    lib_dir = venv_path / 'lib'
+    if not lib_dir.exists():
+        return False
+
+    candidates = []
+    exact_python = lib_dir / f'python{sys.version_info.major}.{sys.version_info.minor}'
+    if exact_python.exists():
+        candidates.append(exact_python / 'site-packages')
+        candidates.extend(
+            p for p in exact_python.iterdir()
+            if p.is_dir() and 'site-packages' in p.name
+        )
+    candidates.extend(p / 'site-packages' for p in lib_dir.glob('python*') if p.is_dir())
+
+    for site_packages in candidates:
+        if site_packages.exists():
+            site_path = str(site_packages)
+            if site_path not in sys.path:
+                sys.path.insert(0, site_path)
+            return True
+    return False
+
+
+add_venv_site_packages()
+
 class Colors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
@@ -35,13 +64,13 @@ def print_info(message: str):
     print(f"{Colors.OKBLUE}{message}{Colors.ENDC}")
 
 def print_success(message: str):
-    print(f"{Colors.OKGREEN}✓ {message}{Colors.ENDC}")
+    print(f"{Colors.OKGREEN}{message}{Colors.ENDC}")
 
 def print_warning(message: str):
-    print(f"{Colors.WARNING}⚠ {message}{Colors.ENDC}")
+    print(f"{Colors.WARNING}WARNING: {message}{Colors.ENDC}")
 
 def print_error(message: str):
-    print(f"{Colors.FAIL}✗ {message}{Colors.ENDC}")
+    print(f"{Colors.FAIL}ERROR: {message}{Colors.ENDC}")
 
 def get_real_user() -> Tuple[str, int, int]:
     """
@@ -1048,8 +1077,8 @@ def configure_postgresql():
         print_info("  5. wal_keep_size = 1GB")
     
     print_info("  6. Add replication entry to pg_hba.conf")
-    print_info("\n⚠ Original files will be backed up before modification")
-    print_info("⚠ PostgreSQL will need to be restarted after these changes")
+    print_info("\nOriginal files will be backed up before modification")
+    print_info("PostgreSQL will need to be restarted after these changes")
     
     if not ask_yes_no("\nProceed with PostgreSQL configuration?"):
         print_warning("Skipping PostgreSQL configuration")
@@ -1505,14 +1534,14 @@ def verify_installation():
             print_warning(f"  - {warning}")
     
     if all(checks):
-        print_success("\n✓ All critical checks passed!")
+        print_success("\nAll critical checks passed!")
         print_info("\nYour backup system is ready to use.")
         print_info("\nNext step - Test the backup:")
         print_info("  venv/bin/python backup.py")
         print_info("  or setup menu 9. Run backup now")
         return True
     else:
-        print_error("\n✗ Some critical checks failed. Please review the errors above.")
+        print_error("\nSome critical checks failed. Please review the errors above.")
         return False
 
 def create_restore_env_file():
@@ -1740,9 +1769,9 @@ def setup_restore_only():
         print_warning("Continuing without .env file. Restore operations may fail without PostgreSQL credentials.")
     
     print_header("Restore Setup Complete!")
-    print_info("\n✓ Virtual environment created and dependencies installed")
+    print_info("\nVirtual environment created and dependencies installed")
     if Path('.env').exists():
-        print_info("✓ Restore configuration saved to .env file:")
+        print_info("Restore configuration saved to .env file:")
         print_info("  - PostgreSQL credentials")
         print_info("  - Backup directory path")
         print_info("  - Alfresco base directory path")
@@ -1771,32 +1800,51 @@ def install_python_dependencies() -> bool:
     )
     if not create_virtual_environment():
         return False
-    pip = venv_pip()
-    if not pip.exists():
-        print_error(f"venv pip not found: {pip}")
+    if not add_venv_site_packages():
+        print_error("Could not load venv site-packages into setup.py")
         return False
-    real_user, _, _ = get_real_user()
-    running_as_root = is_running_as_root()
-    if running_as_root:
-        result = run_command(['sudo', '-u', real_user, str(pip), 'install', '-r', 'requirements.txt'], check=False)
-    else:
-        result = run_command([str(pip), 'install', '-r', 'requirements.txt'], check=False)
-    if result and result.returncode == 0:
-        print_success("Dependencies installed in venv")
-        print_info(f"Run backups with: {venv_python()} backup.py")
+    if not python_dependencies_available():
+        pip = venv_pip()
+        if not pip.exists():
+            print_error(f"venv pip not found: {pip}")
+            return False
+        real_user, _, _ = get_real_user()
+        if is_running_as_root():
+            result = run_command(['sudo', '-u', real_user, str(pip), 'install', '-r', 'requirements.txt'], check=False)
+        else:
+            result = run_command([str(pip), 'install', '-r', 'requirements.txt'], check=False)
+        if not result or result.returncode != 0:
+            print_error("Failed to install dependencies")
+            return False
+        add_venv_site_packages()
+        if not python_dependencies_available():
+            print_error("Dependencies installed but setup.py still cannot import them")
+            return False
+    print_success("Dependencies installed in venv")
+    print_info(f"Run backups with: {venv_python()} backup.py")
+    return True
+
+
+def python_dependencies_available() -> bool:
+    try:
+        import dotenv  # noqa: F401
+        import yaml  # noqa: F401
+        import tqdm  # noqa: F401
         return True
-    print_error("Failed to install dependencies")
-    return False
+    except ImportError:
+        return False
 
 
 def ensure_restic() -> bool:
-    from alfresco_backup.v2.setup_wizard import check_restic_installed, install_restic_ubuntu
-    if check_restic_installed():
+    if shutil.which('restic'):
         print_success("restic is installed")
         return True
     print_warning("restic is not installed")
     if ask_yes_no("Install restic via apt?", default=True):
-        if install_restic_ubuntu(is_running_as_root()):
+        prefix = [] if is_running_as_root() else ['sudo']
+        update = run_command(prefix + ['apt-get', 'update'], capture_output=True, check=False)
+        install = run_command(prefix + ['apt-get', 'install', '-y', 'restic'], capture_output=True, check=False)
+        if update and install and install.returncode == 0 and shutil.which('restic'):
             print_success("restic installed")
             return True
     return False
@@ -1928,11 +1976,41 @@ def setup_multiple_destinations() -> None:
     verify_installation()
 
 
+def guided_initial_setup() -> None:
+    print_header("Guided Backup Setup")
+    print_info("This will automatically check prerequisites, create the venv, install dependencies, and check restic.")
+
+    if not check_prerequisites(for_restore=False):
+        return
+    if not install_python_dependencies():
+        return
+    if not ensure_restic():
+        return
+    if not create_base_env_file():
+        return
+
+    print("\nBackup destination mode:")
+    print("  1. One destination")
+    print("  2. Multiple destinations")
+    mode = input(f"{Colors.OKCYAN}Choice [1]: {Colors.ENDC}").strip() or '1'
+
+    if mode == '2':
+        from alfresco_backup.v2.setup_menu import create_multiple_destinations_policy
+        create_multiple_destinations_policy(Path('backup-policies.yml'), Path('.env'))
+    else:
+        from alfresco_backup.v2.setup_menu import create_single_destination_policy
+        create_single_destination_policy(Path('backup-policies.yml'), Path('.env'))
+
+    if ask_yes_no("Configure automated backup cron now?", default=True):
+        configure_cron_job()
+    verify_installation()
+
+
 def run_backup_now() -> None:
     print_header("Run Backup Now")
     py = venv_python()
     if not py.exists():
-        print_error("Virtual environment missing. Use menu: Install Python dependencies.")
+        print_error("Virtual environment missing. Run Guided setup first.")
         return
     print_info("Running all enabled destinations immediately...")
     run_command([str(py), '-c', 'from alfresco_backup.v2.__main__ import main; main(force_all_destinations=True)'])
@@ -1943,20 +2021,15 @@ def run_main_menu() -> None:
     real_user, _, _ = get_real_user()
     print_info(f"User: {real_user}")
     print_info("Backups use restic only (see backup-policies.yml for destinations).")
-    print_warning("Install Python packages via this menu, not system pip (PEP 668).")
+    print_warning("Do not use system pip. Setup installs packages into ./venv.")
 
     while True:
         print("\nMain menu:")
-        print("  1. Install Python dependencies (venv)")
-        print("  2. Install / check restic")
-        print("  3. Initial setup: single backup destination")
-        print("  4. Initial setup: multiple backup destinations")
-        print("  5. Manage backup destinations")
-        print("  6. Configure host / database (.env)")
-        print("  7. Restore-only setup (venv + .env)")
-        print("  8. Configure automated backup (cron)")
-        print("  9. Run backup now (all enabled destinations)")
-        print(" 10. Verify installation")
+        print("  1. Guided setup")
+        print("  2. Manage backup destinations")
+        print("  3. Run backup now")
+        print("  4. Restore-only setup")
+        print("  5. Verify installation")
         print("  0. Exit")
         choice = input(f"{Colors.OKCYAN}Choice: {Colors.ENDC}").strip()
 
@@ -1964,25 +2037,17 @@ def run_main_menu() -> None:
             print_info("Goodbye.")
             break
         elif choice == '1':
-            install_python_dependencies()
+            guided_initial_setup()
         elif choice == '2':
-            ensure_restic()
-        elif choice == '3':
-            setup_single_destination()
-        elif choice == '4':
-            setup_multiple_destinations()
-        elif choice == '5':
+            if not python_dependencies_available() and not install_python_dependencies():
+                continue
             from alfresco_backup.v2.setup_menu import manage_destinations_menu
             manage_destinations_menu()
-        elif choice == '6':
-            create_base_env_file()
-        elif choice == '7':
-            setup_restore_only()
-        elif choice == '8':
-            configure_cron_job()
-        elif choice == '9':
+        elif choice == '3':
             run_backup_now()
-        elif choice == '10':
+        elif choice == '4':
+            setup_restore_only()
+        elif choice == '5':
             verify_installation()
         else:
             print_warning("Invalid choice")

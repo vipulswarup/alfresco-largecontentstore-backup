@@ -29,10 +29,7 @@ cd alfresco-largecontentstore-backup
 python3 setup.py
 ```
 
-Use the menu to:
-1. Install Python dependencies into `venv/` (do **not** use system `pip`; Ubuntu PEP 668 blocks it)
-2. Install/check **restic**
-3. Initial setup for **one** or **multiple** backup destinations (`backup-policies.yml`)
+Choose **1. Guided setup**. It automatically creates `venv/`, installs Python dependencies there, checks/installs **restic**, then asks whether you want one backup destination or multiple destinations.
 
 **Note:** If venv creation fails, install: `sudo apt install python3-venv python3-full`
 
@@ -48,7 +45,7 @@ Setup wizard configures daily backups at 2 AM. Check cron with `crontab -l`.
 
 ### Running Restores
 
-**First-time setup:** `python3 setup.py` → menu **7. Restore-only setup**
+**First-time setup:** `python3 setup.py` -> menu **4. Restore-only setup**
 
 **Then run restore:**
 ```bash
@@ -61,17 +58,20 @@ Select restore mode and follow prompts. The restore script will prompt you to cl
 
 Configuration is stored in `.env` file. Key settings:
 
-**Required:**
+`.env` stores host/database settings and secrets. `backup-policies.yml` stores restic destinations, schedules, retention, and priority.
+
+**Required in `.env`:**
 - `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD` - PostgreSQL connection
 - `ALF_BASE_DIR` - Path to Alfresco installation
-- `BACKUP_DIR` - Local backup destination (not needed for S3 mode)
-- `RETENTION_DAYS` - How long to keep backups (default: 7)
+
+**Required in `backup-policies.yml`:**
+- One or more restic destinations (`filesystem` or `object_storage`)
+- Per-destination `backup_time`, `retention_days`, and `priority`
 
 **Optional:**
-- `S3_BUCKET`, `S3_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` - S3 mode
-- `CONTENTSTORE_PARALLEL_THREADS` - Parallel threads for large backups (default: 4)
 - `EMAIL_ALERT_MODE` - `both`, `failure_only`, or `none`
 - `SMTP_*` - Email alert configuration
+- Object storage secrets and restic passwords referenced by `*_env` fields
 
 See `env.example` for complete template.
 
