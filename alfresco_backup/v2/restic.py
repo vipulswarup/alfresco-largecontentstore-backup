@@ -215,7 +215,14 @@ class ResticRepository:
     def forget_prune(self, retention_days: int) -> Dict[str, Any]:
         keep = f"{retention_days}d"
         return self._run(
-            ['forget', '--keep-within', keep, '--tag', 'kind:complete-set', '--prune'],
+            [
+                'forget',
+                '--keep-within', keep,
+                '--tag', 'kind:complete-set',
+                '--tag', f'policy:{self.policy.name}',
+                '--group-by', 'host',
+                '--prune',
+            ],
             timeout=86400,
         )
 
