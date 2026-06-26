@@ -324,70 +324,15 @@ class AlfrescoRestore:
     
     def stop_tomcat_only(self) -> bool:
         """Stop only Tomcat, leaving PostgreSQL running."""
+        from alfresco_backup.restore.alfresco_control import stop_tomcat
+
+        alf_base_path = (
+            Path(self.config.alf_base_dir)
+            if isinstance(self.config.alf_base_dir, str)
+            else self.config.alf_base_dir
+        )
         self.logger.info("Stopping Tomcat only (PostgreSQL will remain running)...")
-        
-        try:
-            # Try to stop tomcat using alfresco.sh stop-tomcat or similar
-            # If that doesn't work, try to kill tomcat processes directly
-            result = subprocess.run(
-                ['sudo', '-u', self.config.alfresco_user, 
-                 str(self.config.alfresco_script), 'stop-tomcat'],
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-            
-            if result.returncode == 0:
-                self.logger.info("Tomcat stopped successfully")
-                return True
-            else:
-                # Fallback: try to stop tomcat by finding and killing the process
-                self.logger.info("Attempting alternative method to stop Tomcat...")
-                return self._stop_tomcat_process()
-                
-        except subprocess.TimeoutExpired:
-            self.logger.error("Tomcat stop timed out")
-            return False
-        except Exception as e:
-            self.logger.error(f"Error stopping Tomcat: {e}")
-            return False
-    
-    def _stop_tomcat_process(self) -> bool:
-        """Stop Tomcat by finding and killing the Java process."""
-        try:
-            # Find tomcat process (java process with tomcat/alfresco in classpath)
-            result = subprocess.run(
-                ['pgrep', '-f', 'java.*tomcat|java.*alfresco.*tomcat'],
-                capture_output=True,
-                text=True
-            )
-            
-            if result.returncode == 0:
-                pids = result.stdout.strip().split('\n')
-                for pid in pids:
-                    if pid:
-                        self.logger.info(f"Stopping Tomcat process {pid}")
-                        subprocess.run(['sudo', '-u', self.config.alfresco_user, 'kill', pid], check=False)
-                
-                # Wait a bit for processes to stop
-                import time
-                time.sleep(5)
-                
-                # Verify tomcat is stopped
-                result = subprocess.run(['pgrep', '-f', 'java.*tomcat|java.*alfresco.*tomcat'], capture_output=True)
-                if result.returncode != 0:
-                    self.logger.info("Tomcat stopped successfully")
-                    return True
-                else:
-                    self.logger.warning("Some Tomcat processes may still be running")
-                    return True
-            else:
-                self.logger.info("No Tomcat processes found (may already be stopped)")
-                return True
-                
-        except Exception as e:
-            self.logger.error(f"Error stopping Tomcat process: {e}")
-            return False
+        return stop_tomcat(alf_base_path, self.config.alfresco_user)
     
     def verify_postgresql_running(self) -> bool:
         """Verify that PostgreSQL is running and accepting connections."""
@@ -1349,82 +1294,22 @@ recovery_target_timeline = 'latest'
     def clear_solr_indexes(self) -> bool:
         """
         Clear Solr4 indexes to avoid search errors after restore.
-        
+
         After restoring database and contentstore, Solr indexes may be out of sync
         and need to be cleared. Alfresco will rebuild them automatically on next startup.
-        
+
         Returns:
             True if indexes were cleared (or didn't exist), False on error
         """
+        from alfresco_backup.restore.alfresco_control import clear_solr_indexes
+
         self.logger.info("Clearing Solr4 indexes...")
-        
-        alf_base_path = Path(self.config.alf_base_dir) if isinstance(self.config.alf_base_dir, str) else self.config.alf_base_dir
-        solr4_dir = alf_base_path / 'alf_data' / 'solr4'
-        
-        if not solr4_dir.exists():
-            self.logger.warning(f"Solr4 directory not found: {solr4_dir}")
-            self.logger.info("Solr may be external or indexes already cleared")
-            return True
-        
-        cleared_any = False
-        
-        # Check for embedded Solr4 structure (workspace/SpacesStore/index, archive/SpacesStore/index)
-        workspace_index = solr4_dir / 'workspace' / 'SpacesStore' / 'index'
-        archive_index = solr4_dir / 'archive' / 'SpacesStore' / 'index'
-        
-        if workspace_index.exists() or archive_index.exists():
-            self.logger.info("Found embedded Solr4 indexes")
-            
-            if workspace_index.exists():
-                self.logger.info(f"Clearing workspace index: {workspace_index}")
-                try:
-                    subprocess.run(
-                        ['sudo', '-u', self.config.alfresco_user, 'rm', '-rf', str(workspace_index)],
-                        check=True
-                    )
-                    self.logger.info("Workspace index cleared")
-                    cleared_any = True
-                except Exception as e:
-                    self.logger.error(f"Failed to clear workspace index: {e}")
-                    return False
-            
-            if archive_index.exists():
-                self.logger.info(f"Clearing archive index: {archive_index}")
-                try:
-                    subprocess.run(
-                        ['sudo', '-u', self.config.alfresco_user, 'rm', '-rf', str(archive_index)],
-                        check=True
-                    )
-                    self.logger.info("Archive index cleared")
-                    cleared_any = True
-                except Exception as e:
-                    self.logger.error(f"Failed to clear archive index: {e}")
-                    return False
-        
-        # Check for external Solr structure (solr4/index)
-        external_index = solr4_dir / 'index'
-        if external_index.exists():
-            self.logger.info("Found external Solr index")
-            self.logger.info(f"Clearing external index: {external_index}")
-            try:
-                subprocess.run(
-                    ['sudo', '-u', self.config.alfresco_user, 'rm', '-rf', str(external_index)],
-                    check=True
-                )
-                self.logger.info("External index cleared")
-                cleared_any = True
-            except Exception as e:
-                self.logger.error(f"Failed to clear external index: {e}")
-                return False
-        
-        if not cleared_any:
-            self.logger.warning("No Solr indexes found to clear")
-            self.logger.info("Indexes may have already been cleared or Solr is configured differently")
-        else:
-            self.logger.info("Solr4 indexes cleared successfully")
-            self.logger.info("Alfresco will rebuild indexes automatically on next startup")
-        
-        return True
+        alf_base_path = (
+            Path(self.config.alf_base_dir)
+            if isinstance(self.config.alf_base_dir, str)
+            else self.config.alf_base_dir
+        )
+        return clear_solr_indexes(alf_base_path, self.config.alfresco_user)
 
 
 def ask_question(prompt: str, default: Optional[str] = None) -> str:
@@ -1662,7 +1547,18 @@ def get_config() -> RestoreConfig:
     if not config.restore_log_dir:
         log_dir = ask_question("Log file directory", str(Path.cwd()))
         config.restore_log_dir = log_dir
-    
+
+    if config.alf_base_dir:
+        from alfresco_backup.restore.alfresco_control import confirm_alf_base_dir
+
+        confirmed = confirm_alf_base_dir(
+            Path(config.alf_base_dir)
+            if not isinstance(config.alf_base_dir, Path)
+            else config.alf_base_dir
+        )
+        config.alf_base_dir = confirmed
+        os.environ['ALF_BASE_DIR'] = str(confirmed)
+
     return config
 
 

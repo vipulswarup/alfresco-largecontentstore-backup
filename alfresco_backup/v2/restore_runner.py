@@ -5,20 +5,27 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from .app_config import AppConfig
 from .integrity import IntegrityRepairer
 from .restore_planner import RestorePlanner, RestorableSet
+from alfresco_backup.restore.alfresco_control import (
+    clear_solr_indexes,
+    confirm_alf_base_dir,
+    start_tomcat,
+    stop_tomcat,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def run_v2_restore_interactive(config: AppConfig) -> int:
+    alfresco_user = os.getenv('ALFRESCO_USER', os.getenv('USER', 'alfresco'))
+    alf_base = confirm_alf_base_dir(config.alf_base_dir)
+
     planner = RestorePlanner(config)
     groups = planner.list_complete_sets()
 
@@ -61,6 +68,10 @@ def run_v2_restore_interactive(config: AppConfig) -> int:
     if confirm != 'RESTORE':
         print("Cancelled.")
         return 0
+
+    if not stop_tomcat(alf_base, alfresco_user):
+        print("ERROR: Could not stop Tomcat. Aborting restore.")
+        return 1
 
     staging = Path(tempfile.mkdtemp(prefix='alfresco-v2-restore-'))
     logger.info(f"Staging restore at {staging}")
@@ -115,15 +126,23 @@ def run_v2_restore_interactive(config: AppConfig) -> int:
 
     print(f"Installing restored contentstore to {live_cs}")
     shutil.copytree(cs_staged, live_cs)
-    alfresco_user = os.getenv('ALFRESCO_USER', os.getenv('USER', 'alfresco'))
     _chown_recursive(live_cs, alfresco_user)
 
-    alf_script = config.alf_base_dir / 'alfresco.sh'
-    if alf_script.exists():
-        print("Starting Alfresco...")
-        subprocess.run([str(alf_script), 'start'], check=False)
+    print("\nDatabase and contentstore restore completed.")
+    print("Solr4 indexes should be cleared after a restore to avoid search errors.")
+    clear_indexes = input("Clear Solr4 indexes now? [Y/n]: ").strip().lower()
+    if clear_indexes != 'n':
+        if not clear_solr_indexes(alf_base, alfresco_user):
+            print("ERROR: Failed to clear Solr indexes.")
+            shutil.rmtree(staging, ignore_errors=True)
+            return 1
     else:
-        print(f"Start Alfresco manually: {alf_script}")
+        print("Skipping Solr index clearing.")
+
+    if not start_tomcat(alf_base, alfresco_user):
+        print("ERROR: Failed to start Tomcat.")
+        shutil.rmtree(staging, ignore_errors=True)
+        return 1
 
     print("\nV2 restore completed successfully.")
     shutil.rmtree(staging, ignore_errors=True)
