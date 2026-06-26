@@ -10,7 +10,12 @@ from alfresco_backup.v2.app_config import AppConfig
 from alfresco_backup.v2.integrity import content_url_to_path
 from alfresco_backup.v2.migration import migrate_legacy_env, needs_migration
 from alfresco_backup.v2.restore_planner import RestorePlanner, _tag_value
-from alfresco_backup.v2.schedule import is_backup_due, is_maintenance_due, parse_hhmm
+from alfresco_backup.v2.schedule import (
+    is_backup_due,
+    is_maintenance_due,
+    maintenance_cron_expression,
+    parse_hhmm,
+)
 
 
 def test_parse_hhmm():
@@ -28,6 +33,11 @@ def test_maintenance_due_sunday():
     now = datetime(2025, 5, 18, 3, 30, 0)  # Sunday
     assert is_maintenance_due(True, 'sunday', '03:30', now) is True
     assert is_maintenance_due(True, 'monday', '03:30', now) is False
+
+
+def test_maintenance_cron_expression():
+    assert maintenance_cron_expression('sunday', '03:30') == '30 3 * * 0'
+    assert maintenance_cron_expression('monday', '05:15') == '15 5 * * 1'
 
 
 def test_migration_from_legacy_env(tmp_path):

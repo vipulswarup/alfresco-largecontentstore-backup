@@ -96,12 +96,22 @@ def run_backup(config: AppConfig, force: bool = False) -> RunResult:
             else:
                 run_result.status = 'failure'
 
+            post_backup_policies = [
+                p for p in due_backup
+                if _destination_succeeded(dest_results, p.name)
+                and not _failed_lock(dest_results, p.name)
+            ]
+            post_backup_maintenance = _run_maintenance(config, post_backup_policies)
+            maintained = {m.policy_name for m in post_backup_maintenance}
+
             maint_policies = [
                 p for p in due_maint
                 if p.name not in backing_up
+                and p.name not in maintained
                 and not _failed_lock(dest_results, p.name)
             ]
-            run_result.maintenance = _run_maintenance(config, maint_policies)
+            scheduled_maintenance = _run_maintenance(config, maint_policies)
+            run_result.maintenance = post_backup_maintenance + scheduled_maintenance
 
             run_result.finished_at = datetime.now().isoformat()
             send_run_report(config, run_result)
@@ -150,6 +160,13 @@ def _failed_lock(dest_results, policy_name: str) -> bool:
     for d in dest_results:
         if d.policy_name == policy_name and d.lock_contention:
             return True
+    return False
+
+
+def _destination_succeeded(dest_results, policy_name: str) -> bool:
+    for d in dest_results:
+        if d.policy_name == policy_name:
+            return d.success
     return False
 
 

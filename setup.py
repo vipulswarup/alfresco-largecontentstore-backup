@@ -1245,6 +1245,21 @@ def create_virtual_environment():
         print_error(f"Error setting up virtual environment: {e}")
         return False
 
+def _load_default_maintenance_config() -> dict:
+    """Read global.default_maintenance from backup-policies.yml if present."""
+    policies_file = Path('backup-policies.yml')
+    defaults = {'enabled': True, 'day_of_week': 'sunday', 'time': '03:30'}
+    if not policies_file.exists():
+        return defaults
+    try:
+        import yaml
+        with open(policies_file, 'r', encoding='utf-8') as f:
+            doc = yaml.safe_load(f) or {}
+        return (doc.get('global') or {}).get('default_maintenance') or defaults
+    except Exception:
+        return defaults
+
+
 def configure_cron_job():
     """Configure cron job for automated backups."""
     print_header("Step 5: Configure Cron Job")
@@ -1337,17 +1352,49 @@ def configure_cron_job():
     # Build cron command with date-stamped log file
     cron_command = f"cd {current_dir} && {venv_python} {backup_script} >> {log_dir}/cron-$(date +\\%Y-\\%m-\\%d).log 2>&1"
     cron_entry = f"{cron_time} {cron_command}"
+
+    maintenance_config = _load_default_maintenance_config()
+    maintenance_entry = None
+    maintenance_desc = None
+    if maintenance_config.get('enabled', True):
+        from alfresco_backup.v2.schedule import maintenance_cron_expression
+        maintenance_cron_time = maintenance_cron_expression(
+            str(maintenance_config.get('day_of_week', 'sunday')),
+            str(maintenance_config.get('time', '03:30')),
+        )
+        maintenance_command = (
+            f"cd {current_dir} && {venv_python} {backup_script} "
+            f">> {log_dir}/cron-maintenance-$(date +\\%Y-\\%m-\\%d).log 2>&1"
+        )
+        maintenance_entry = f"{maintenance_cron_time} {maintenance_command}"
+        maintenance_desc = (
+            f"{maintenance_config.get('day_of_week', 'sunday').title()} "
+            f"at {maintenance_config.get('time', '03:30')} "
+            "(scheduled retention pass)"
+        )
     
-    print_info("\nCron entry to be added:")
+    print_info("\nCron entries to be added:")
     print_info(f"  {cron_entry}")
     print_info(f"\nThis will run backups: {schedule_desc}")
     print_info(f"Logs will be written to: {log_dir}/cron-YYYY-MM-DD.log")
+    if maintenance_entry:
+        print_info(f"\n  {maintenance_entry}")
+        print_info(f"\nThis will run scheduled maintenance: {maintenance_desc}")
+        print_info(f"Logs will be written to: {log_dir}/cron-maintenance-YYYY-MM-DD.log")
+    else:
+        print_info("\nScheduled maintenance cron skipped (default_maintenance.enabled is false).")
+    print_info(
+        "\nRetention is also enforced after each successful backup "
+        "(restic forget/prune per policy retention_days)."
+    )
     
-    if not ask_yes_no("\nAdd this cron job?"):
+    if not ask_yes_no("\nAdd these cron jobs?"):
         print_warning("Skipping cron job configuration")
         print_info("\nTo add manually later:")
         print_info("  crontab -e")
         print_info(f"  # Add: {cron_entry}")
+        if maintenance_entry:
+            print_info(f"  # Add: {maintenance_entry}")
         return False
     
     # Add cron job
@@ -1368,6 +1415,8 @@ def configure_cron_job():
             new_crontab += '\n'
         new_crontab += f"\n# Alfresco backup - added by setup script\n"
         new_crontab += f"{cron_entry}\n"
+        if maintenance_entry:
+            new_crontab += f"{maintenance_entry}\n"
         
         # Write new crontab
         import tempfile
@@ -1380,7 +1429,7 @@ def configure_cron_job():
             install_cmd = ['crontab', '-u', real_user, temp_file] if running_as_root else ['crontab', temp_file]
             result = run_command(install_cmd, check=False)
             if result and result.returncode == 0:
-                print_success("Cron job added successfully")
+                print_success("Cron jobs added successfully")
                 
                 # Verify (use -u flag when running as root)
                 verify_cmd = ['crontab', '-u', real_user, '-l'] if running_as_root else ['crontab', '-l']
@@ -1399,6 +1448,8 @@ def configure_cron_job():
         print_info("\nTo add manually:")
         print_info("  crontab -e")
         print_info(f"  # Add: {cron_entry}")
+        if maintenance_entry:
+            print_info(f"  # Add: {maintenance_entry}")
         return False
 
 def verify_installation():

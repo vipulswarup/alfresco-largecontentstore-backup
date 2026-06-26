@@ -8,6 +8,16 @@ VALID_DAYS = {
     'friday', 'saturday', 'sunday',
 }
 
+DAY_TO_CRON_WEEKDAY = {
+    'sunday': '0',
+    'monday': '1',
+    'tuesday': '2',
+    'wednesday': '3',
+    'thursday': '4',
+    'friday': '5',
+    'saturday': '6',
+}
+
 
 def parse_hhmm(value: str) -> time:
     parts = value.strip().split(':')
@@ -46,6 +56,15 @@ def is_maintenance_due(
     if now.strftime('%A').lower() != day:
         return False
     return _within_minute_window(now, parse_hhmm(maintenance_time))
+
+
+def maintenance_cron_expression(day_of_week: str, maintenance_time: str) -> str:
+    """Cron schedule (minute hour dom month dow) for weekly maintenance."""
+    day = day_of_week.strip().lower()
+    if day not in VALID_DAYS:
+        raise ValueError(f"Invalid day_of_week: {day_of_week}")
+    scheduled = parse_hhmm(maintenance_time)
+    return f"{scheduled.minute} {scheduled.hour} * * {DAY_TO_CRON_WEEKDAY[day]}"
 
 
 def validate_schedule_fields(backup_time: str, maintenance: dict) -> None:
