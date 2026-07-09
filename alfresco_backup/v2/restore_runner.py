@@ -47,6 +47,7 @@ def run_v2_restore_interactive(config: AppConfig, alf_base: Path = None, dry_run
         "Confirm the EisenVault restore folder.",
         "Select a complete backup run.",
         "Validate backup source, restore folder, database connection, and staging space.",
+        "Use contentstore files from the backup snapshot; the original source folder does not need to exist.",
         "Stop Tomcat while keeping PostgreSQL available.",
         "Stage the selected backup snapshot.",
         "Restore PostgreSQL from the staged dump.",

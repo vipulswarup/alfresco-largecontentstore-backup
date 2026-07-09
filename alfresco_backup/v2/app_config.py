@@ -51,9 +51,17 @@ def _first_env(names) -> str:
 class AppConfig:
     """Resolved v2 configuration from .env and backup-policies.yml."""
 
-    def __init__(self, env_file: str = '.env', policies_file: Optional[str] = None):
+    def __init__(
+        self,
+        env_file: str = '.env',
+        policies_file: Optional[str] = None,
+        mode: str = 'backup',
+    ):
+        if mode not in ('backup', 'restore'):
+            raise ValueError("mode must be 'backup' or 'restore'")
         self.env_file = Path(env_file)
         self.policies_file = Path(policies_file or POLICIES_FILENAME)
+        self.mode = mode
         self._env: Dict[str, str] = {}
         self.global_config: Optional[GlobalConfig] = None
         self.credential_profiles: List[CredentialProfile] = []
@@ -185,8 +193,10 @@ class AppConfig:
     def _validate_env_secrets(self) -> None:
         required = ['PGHOST', 'PGPORT', 'PGUSER', 'PGPASSWORD']
         missing = [v for v in required if not os.getenv(v)]
-        if not _first_env(SOURCE_DIR_VARS) and not _first_env(RESTORE_DIR_VARS):
-            missing.append('EISENVAULT_SOURCE_DIR or EISENVAULT_RESTORE_DIR')
+        if self.mode == 'backup' and not _first_env(SOURCE_DIR_VARS):
+            missing.append('EISENVAULT_SOURCE_DIR or ALF_BASE_DIR')
+        if self.mode == 'restore' and not _first_env(RESTORE_DIR_VARS):
+            missing.append('EISENVAULT_RESTORE_DIR or ALF_BASE_DIR')
         if missing:
             print(f"ERROR: Missing required environment variables: {', '.join(missing)}")
             sys.exit(1)
@@ -217,15 +227,19 @@ class AppConfig:
         source_base = Path(source_value) if source_value else None
         restore_base = Path(restore_value) if restore_value else None
 
-        if source_base is not None and not source_base.exists():
-            raise ValueError(f"EISENVAULT_SOURCE_DIR does not exist: {source_base}")
-        if restore_base is not None and not restore_base.exists():
-            raise ValueError(f"EISENVAULT_RESTORE_DIR does not exist: {restore_base}")
-
-        if source_base is not None:
+        if self.mode == 'backup':
+            if source_base is None:
+                raise ValueError('EISENVAULT_SOURCE_DIR or ALF_BASE_DIR is required for backup')
+            if not source_base.exists():
+                raise ValueError(f"EISENVAULT_SOURCE_DIR does not exist: {source_base}")
             cs = source_base / 'alf_data' / 'contentstore'
             if not cs.exists():
                 raise ValueError(f"Source contentstore does not exist: {cs}")
+        else:
+            if restore_base is None:
+                raise ValueError('EISENVAULT_RESTORE_DIR or ALF_BASE_DIR is required for restore')
+            if not restore_base.exists():
+                raise ValueError(f"EISENVAULT_RESTORE_DIR does not exist: {restore_base}")
 
         for policy in self.backup_policies:
             if policy.destination_type == 'filesystem' and policy.repository_path:

@@ -121,6 +121,68 @@ def test_app_config_separates_source_and_restore_dirs(tmp_path, monkeypatch):
     assert cfg.restore_contentstore_path == restore / 'alf_data' / 'contentstore'
 
 
+def test_app_config_restore_mode_allows_deleted_source_dir(tmp_path, monkeypatch):
+    missing_source = tmp_path / 'deleted-source'
+    restore = tmp_path / 'restore'
+    restore.mkdir()
+    env = tmp_path / '.env'
+    policies = tmp_path / 'backup-policies.yml'
+    env.write_text(
+        f"PGHOST=localhost\nPGPORT=5432\nPGUSER=a\nPGPASSWORD=b\n"
+        f"EISENVAULT_SOURCE_DIR={missing_source}\n"
+        f"EISENVAULT_RESTORE_DIR={restore}\n"
+    )
+    policies.write_text(yaml.dump({
+        'config_version': 1,
+        'global': {'staging_dir': str(tmp_path / 'staging'), 'max_parallel_destinations': 2},
+        'credential_profiles': [],
+        'backup_policies': [{
+            'name': 'local',
+            'enabled': True,
+            'destination_type': 'filesystem',
+            'repository_path': str(tmp_path / 'repo'),
+            'encryption': {'enabled': False, 'password_env': None},
+            'backup_time': '02:00',
+            'retention_days': 7,
+            'priority': 10,
+        }],
+    }))
+    monkeypatch.chdir(tmp_path)
+    cfg = AppConfig(str(env), str(policies), mode='restore')
+    assert cfg.restore_alf_base_dir == restore
+
+
+def test_app_config_backup_mode_requires_source_contentstore(tmp_path, monkeypatch):
+    missing_source = tmp_path / 'deleted-source'
+    restore = tmp_path / 'restore'
+    restore.mkdir()
+    env = tmp_path / '.env'
+    policies = tmp_path / 'backup-policies.yml'
+    env.write_text(
+        f"PGHOST=localhost\nPGPORT=5432\nPGUSER=a\nPGPASSWORD=b\n"
+        f"EISENVAULT_SOURCE_DIR={missing_source}\n"
+        f"EISENVAULT_RESTORE_DIR={restore}\n"
+    )
+    policies.write_text(yaml.dump({
+        'config_version': 1,
+        'global': {'staging_dir': str(tmp_path / 'staging'), 'max_parallel_destinations': 2},
+        'credential_profiles': [],
+        'backup_policies': [{
+            'name': 'local',
+            'enabled': True,
+            'destination_type': 'filesystem',
+            'repository_path': str(tmp_path / 'repo'),
+            'encryption': {'enabled': False, 'password_env': None},
+            'backup_time': '02:00',
+            'retention_days': 7,
+            'priority': 10,
+        }],
+    }))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match='EISENVAULT_SOURCE_DIR does not exist'):
+        AppConfig(str(env), str(policies))
+
+
 def test_content_url_mapping(tmp_path):
     root = tmp_path / 'contentstore'
     p = content_url_to_path('store://2024/01/15/10/30/abc.bin', root)

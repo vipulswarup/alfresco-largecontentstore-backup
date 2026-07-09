@@ -1703,7 +1703,7 @@ def main():
             sys.exit(1)
         from alfresco_backup.v2.app_config import AppConfig
         from alfresco_backup.v2.restore_runner import run_v2_restore_interactive
-        v2_config = AppConfig('.env', str(policies))
+        v2_config = AppConfig('.env', str(policies), mode='restore')
         sys.exit(run_v2_restore_interactive(v2_config, Path(config.alf_base_dir), dry_run=args.dry_run))
 
     print("\nLegacy restore modes:")
