@@ -60,6 +60,7 @@ def _show_policies(path: Path) -> None:
 
 def _validate_all(env_path: Path, policies_path: Path) -> None:
     try:
+        _ensure_policy_passwords(env_path, policies_path)
         config = AppConfig(str(env_path), str(policies_path))
     except Exception as e:
         print(f"Config error: {e}")
@@ -101,6 +102,7 @@ def _init_repos(env_path: Path, policies_path: Path) -> None:
             "Destinations must enable encryption or restic must be upgraded."
         )
 
+    _ensure_policy_passwords(env_path, policies_path)
     config = AppConfig(str(env_path), str(policies_path))
     for policy in config.enabled_policies():
         profile = config.get_profile(policy.credential_profile) if policy.credential_profile else None
@@ -204,6 +206,81 @@ def _restic_password_env_name(policy_name: str) -> str:
     if not suffix:
         suffix = 'POLICY'
     return f"RESTIC_PASSWORD_{suffix}"
+
+
+def _normalize_env_key(key: str) -> str:
+    return re.sub(r'[^A-Za-z0-9]+', '', key).upper()
+
+
+def _read_env_assignments(env_path: Path) -> dict:
+    values = {}
+    if not env_path.exists():
+        return values
+    for line in env_path.read_text(encoding='utf-8').splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#') or '=' not in stripped:
+            continue
+        key, value = stripped.split('=', 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _append_env_value(env_path: Path, key: str, value: str) -> None:
+    content = env_path.read_text(encoding='utf-8') if env_path.exists() else ''
+    if content and not content.endswith('\n'):
+        content += '\n'
+    content += f"\n# Added by setup to satisfy backup-policies.yml\n{key}={value}\n"
+    env_path.write_text(content, encoding='utf-8')
+    os.chmod(env_path, 0o600)
+
+
+def _ensure_policy_passwords(env_path: Path, policies_path: Path) -> None:
+    """Ensure every encrypted policy has a usable RESTIC_PASSWORD_* env var."""
+    doc = _load_policies(policies_path)
+    policies = doc.get('backup_policies', [])
+    changed = False
+
+    for policy in policies:
+        enc = policy.setdefault('encryption', {})
+        if not enc.get('enabled', True):
+            continue
+
+        name = policy.get('name', '').strip()
+        password_env = enc.get('password_env')
+        if not password_env:
+            password_env = _restic_password_env_name(name)
+            enc['password_env'] = password_env
+            changed = True
+            print(f"Policy {name}: using restic password env var {password_env}")
+
+        values = _read_env_assignments(env_path)
+        if values.get(password_env):
+            continue
+
+        normalized_target = _normalize_env_key(password_env)
+        compatible = [
+            (key, value)
+            for key, value in values.items()
+            if key.startswith('RESTIC_PASSWORD_')
+            and value
+            and _normalize_env_key(key) == normalized_target
+        ]
+        if compatible:
+            source_key, source_value = compatible[0]
+            _append_env_value(env_path, password_env, source_value)
+            print(
+                f"Policy {name}: added {password_env} as an alias of existing {source_key}"
+            )
+            continue
+
+        _ensure_env_secret(
+            env_path,
+            password_env,
+            f"Enter restic repository password for existing policy '{name}'",
+        )
+
+    if changed:
+        _save_policies(policies_path, doc)
 
 
 def _ask_encryption_enabled() -> bool:
