@@ -12,21 +12,44 @@ TOMCAT_PGREP = ['pgrep', '-f', 'java.*tomcat|java.*alfresco.*tomcat']
 DEFAULT_STOP_WAIT_SECONDS = 60
 
 
+def _yes_no(prompt: str, default: bool = True) -> bool:
+    suffix = " [Y/n]: " if default else " [y/N]: "
+    answer = input(prompt + suffix).strip().lower()
+    if not answer:
+        return default
+    return answer in ('y', 'yes')
+
+
+def _path_with_leading_slash_hint(path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return Path('/') / path
+
+
 def confirm_alf_base_dir(default: Path) -> Path:
-    """Ask the user to verify or change ALF_BASE_DIR before restore."""
+    """Ask the user to verify or change the EisenVault restore folder before restore."""
     print("\n" + "=" * 80)
-    print("  Alfresco Base Directory")
+    print("  EisenVault Restore Folder")
     print("=" * 80)
-    print(f"\nALF_BASE_DIR from .env: {default}")
-    print("If this path is wrong, enter the correct Alfresco installation directory.")
+    print(f"\nCurrent EisenVault restore folder: {default}")
+    print("This is the EisenVault installation folder to restore into.")
     print("Press Enter to keep the current value.")
 
-    answer = input(f"Alfresco base directory [{default}]: ").strip()
-    chosen = Path(answer).expanduser() if answer else default
+    while True:
+        answer = input(f"EisenVault restore folder [{default}]: ").strip()
+        chosen = Path(answer).expanduser() if answer else default
 
-    if not chosen.exists():
+        if chosen.exists():
+            break
+
+        slash_candidate = _path_with_leading_slash_hint(chosen)
+        if slash_candidate != chosen and slash_candidate.exists():
+            if _yes_no(f"Did you mean {slash_candidate}?", default=True):
+                chosen = slash_candidate
+                break
+
         print(f"ERROR: Directory does not exist: {chosen}")
-        raise SystemExit(1)
+        print("Please edit the path and try again, or press Ctrl+C to cancel.")
 
     alf_script = chosen / 'alfresco.sh'
     if not alf_script.exists():
@@ -41,6 +64,47 @@ def is_tomcat_running() -> bool:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
+def is_postgresql_ready(
+    alf_base_dir: Path,
+    pg_host: str,
+    pg_port: str,
+    pg_user: str,
+    pg_password: str,
+    pg_database: str,
+) -> tuple:
+    """Return (ready, message) by making a real psql connection."""
+    psql = 'psql'
+    embedded = alf_base_dir / 'postgresql' / 'bin' / 'psql'
+    if embedded.exists():
+        psql = str(embedded)
+
+    env = os.environ.copy()
+    if pg_password:
+        env['PGPASSWORD'] = pg_password
+
+    try:
+        result = subprocess.run(
+            [psql, '-h', pg_host, '-p', pg_port, '-U', pg_user, '-d', pg_database, '-t', '-A', '-c', 'SELECT 1;'],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False, f"psql not found. Install postgresql-client or use embedded psql under {alf_base_dir}."
+    except subprocess.TimeoutExpired:
+        return False, f"Timed out connecting to PostgreSQL at {pg_host}:{pg_port}."
+    except Exception as e:
+        return False, f"Error checking PostgreSQL: {e}"
+
+    if result.returncode == 0:
+        return True, "PostgreSQL is accepting connections."
+
+    message = result.stderr.strip() or result.stdout.strip() or f"psql exited {result.returncode}"
+    return False, message
+
+
 def _run_as_user(user: str, cmd: list, timeout: int = 300) -> subprocess.CompletedProcess:
     if user and user != os.getenv('USER', ''):
         full_cmd = ['sudo', '-u', user] + cmd
@@ -53,6 +117,83 @@ def _run_as_user(user: str, cmd: list, timeout: int = 300) -> subprocess.Complet
         timeout=timeout,
         check=False,
     )
+
+
+def start_postgresql(alf_base_dir: Path, alfresco_user: str) -> bool:
+    """Start PostgreSQL without requiring the restore wizard to restart."""
+    pg_ctl = alf_base_dir / 'postgresql' / 'scripts' / 'ctl.sh'
+    alf_script = alf_base_dir / 'alfresco.sh'
+
+    commands = []
+    if pg_ctl.exists():
+        commands.append([str(pg_ctl), 'start'])
+    if alf_script.exists():
+        commands.append([str(alf_script), 'start-postgresql'])
+        commands.append([str(alf_script), 'start'])
+
+    if not commands:
+        print(f"ERROR: No PostgreSQL start script found under {alf_base_dir}")
+        return False
+
+    for cmd in commands:
+        print(f"Starting PostgreSQL with: {' '.join(cmd)}")
+        try:
+            result = _run_as_user(alfresco_user, cmd, timeout=300)
+        except subprocess.TimeoutExpired:
+            print("WARNING: PostgreSQL start command timed out; it may still be starting.")
+            return True
+        except Exception as e:
+            print(f"ERROR: Failed to run PostgreSQL start command: {e}")
+            continue
+
+        if result.stdout:
+            print(result.stdout.strip())
+        if result.stderr:
+            print(result.stderr.strip())
+        if result.returncode == 0:
+            return True
+
+    print("ERROR: PostgreSQL start command did not succeed.")
+    return False
+
+
+def ensure_postgresql_ready(
+    alf_base_dir: Path,
+    alfresco_user: str,
+    pg_host: str,
+    pg_port: str,
+    pg_user: str,
+    pg_password: str,
+    pg_database: str,
+) -> bool:
+    """Check PostgreSQL and offer to start it without restarting the restore flow."""
+    ready, message = is_postgresql_ready(
+        alf_base_dir, pg_host, pg_port, pg_user, pg_password, pg_database
+    )
+    if ready:
+        print(message)
+        return True
+
+    print("PostgreSQL is not accepting connections.")
+    print(message)
+    if not _yes_no("Start PostgreSQL now?", default=True):
+        return False
+
+    if not start_postgresql(alf_base_dir, alfresco_user):
+        return False
+
+    for _ in range(12):
+        ready, message = is_postgresql_ready(
+            alf_base_dir, pg_host, pg_port, pg_user, pg_password, pg_database
+        )
+        if ready:
+            print(message)
+            return True
+        time.sleep(5)
+
+    print("PostgreSQL still is not accepting connections after waiting.")
+    print(message)
+    return False
 
 
 def _tomcat_pids() -> list:

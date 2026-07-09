@@ -40,6 +40,10 @@ def migrate_legacy_env(
     s3_bucket = values.get('S3_BUCKET', '').strip()
     backup_dir = values.get('BACKUP_DIR', '').strip()
     retention = int(values.get('RETENTION_DAYS', '7') or '7')
+    legacy_base = values.get('ALF_BASE_DIR', '').strip()
+    if legacy_base:
+        _append_env_if_missing(env_path, 'EISENVAULT_SOURCE_DIR', legacy_base)
+        _append_env_if_missing(env_path, 'EISENVAULT_RESTORE_DIR', legacy_base)
 
     global_section = {
         'staging_dir': '/var/tmp/alfresco-backup',

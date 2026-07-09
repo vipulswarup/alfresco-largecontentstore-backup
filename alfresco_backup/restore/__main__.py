@@ -71,7 +71,7 @@ class RestoreConfig:
                 errors.append("S3 configuration incomplete: S3_BUCKET, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY required")
         
         if not self.alf_base_dir or not Path(self.alf_base_dir).exists():
-            errors.append(f"Alfresco base directory does not exist: {self.alf_base_dir}")
+            errors.append(f"EisenVault restore folder does not exist: {self.alf_base_dir}")
         
         if self.alf_base_dir:
             # Ensure alf_base_dir is a Path object
@@ -92,6 +92,14 @@ class RestoreConfig:
                 errors.append(f"Alfresco control script not found: {self.alfresco_script}")
         
         return len(errors) == 0, errors
+
+
+def _restore_dir_from_env() -> Optional[str]:
+    return (
+        os.getenv('EISENVAULT_RESTORE_DIR')
+        or os.getenv('ALF_RESTORE_DIR')
+        or os.getenv('ALF_BASE_DIR')
+    )
 
 
 class RestoreLogger:
@@ -406,6 +414,40 @@ class AlfrescoRestore:
         except Exception as e:
             self.logger.error(f"Error verifying PostgreSQL: {e}")
             return False
+
+    def ensure_postgresql_running(self) -> bool:
+        """Verify PostgreSQL and prompt to start it if needed."""
+        from alfresco_backup.restore.alfresco_control import ensure_postgresql_ready, stop_tomcat
+
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
+
+        pg_host = os.getenv('PGHOST', 'localhost')
+        pg_port = os.getenv('PGPORT', '5432')
+        pg_user = os.getenv('PGUSER', 'alfresco')
+        pg_password = os.getenv('PGPASSWORD', '')
+        pg_database = os.getenv('PGDATABASE', 'postgres')
+        alf_base_path = (
+            Path(self.config.alf_base_dir)
+            if isinstance(self.config.alf_base_dir, str)
+            else self.config.alf_base_dir
+        )
+
+        if not ensure_postgresql_ready(
+            alf_base_path,
+            self.config.alfresco_user,
+            pg_host,
+            pg_port,
+            pg_user,
+            pg_password,
+            pg_database,
+        ):
+            return False
+
+        return stop_tomcat(alf_base_path, self.config.alfresco_user)
     
     def stop_alfresco(self) -> bool:
         """Stop Alfresco and PostgreSQL services (legacy method, kept for compatibility)."""
@@ -1354,7 +1396,7 @@ def get_config() -> RestoreConfig:
         load_dotenv()
         
         backup_dir = os.getenv('BACKUP_DIR')
-        alf_base_dir = os.getenv('ALF_BASE_DIR')
+        alf_base_dir = _restore_dir_from_env()
         alfresco_user = os.getenv('ALFRESCO_USER')
         s3_bucket = os.getenv('S3_BUCKET')
         
@@ -1433,7 +1475,7 @@ def get_config() -> RestoreConfig:
                             elif key == 'AWS_SECRET_ACCESS_KEY' and value:
                                 config.s3_secret_access_key = value
                                 env_loaded['s3_secret_access_key'] = True
-                            elif key == 'ALF_BASE_DIR' and value:
+                            elif key in ('EISENVAULT_RESTORE_DIR', 'ALF_RESTORE_DIR', 'ALF_BASE_DIR') and value:
                                 alf_base_dir = value
                                 env_loaded['alf_base_dir'] = True
                             elif key == 'ALFRESCO_USER' and value:
@@ -1459,7 +1501,7 @@ def get_config() -> RestoreConfig:
     
     # Fall back to interactive configuration
     print("\n" + "=" * 80)
-    print("  Alfresco Restore Configuration")
+    print("  EisenVault Restore Configuration")
     print("=" * 80)
     print("\nPlease provide the following information:\n")
     
@@ -1528,7 +1570,7 @@ def get_config() -> RestoreConfig:
     # Only prompt for alf_base_dir if not already set from .env
     if not env_loaded.get('alf_base_dir', False):
         while True:
-            alf_base = ask_question("Alfresco base directory (ALF_BASE_DIR)")
+            alf_base = ask_question("EisenVault restore folder (ALF_BASE_DIR)")
             alf_base_path = Path(alf_base)
             if alf_base_path.exists():
                 config.alf_base_dir = alf_base_path
@@ -1539,7 +1581,7 @@ def get_config() -> RestoreConfig:
     
     # Only prompt for alfresco_user if not already set from .env
     if not env_loaded.get('alfresco_user', False):
-        config.alfresco_user = ask_question("Alfresco username", config.alfresco_user)
+        config.alfresco_user = ask_question("EisenVault service account username", config.alfresco_user)
     elif alfresco_user:
         config.alfresco_user = alfresco_user
     
@@ -1557,6 +1599,7 @@ def get_config() -> RestoreConfig:
             else config.alf_base_dir
         )
         config.alf_base_dir = confirmed
+        os.environ['EISENVAULT_RESTORE_DIR'] = str(confirmed)
         os.environ['ALF_BASE_DIR'] = str(confirmed)
 
     return config
@@ -1587,7 +1630,12 @@ def select_backup(backups: List[str], backup_type: str) -> str:
             print("Please enter a valid number")
 def main():
     """Main restore program."""
-    parser = ArgumentParser(description='Alfresco automated restore system')
+    parser = ArgumentParser(description='EisenVault automated restore system')
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Validate restore inputs and show the restore plan without stopping services or changing data.',
+    )
     args = parser.parse_args()
     
     config = get_config()
@@ -1601,19 +1649,43 @@ def main():
     
     log_file = Path(config.restore_log_dir) / f'restore-{datetime.now().strftime("%Y%m%d-%H%M%S")}.log'
     logger = RestoreLogger(log_file)
+    from alfresco_backup.restore.restore_ux import (
+        confirm_destructive_restore,
+        collect_restore_folder_checks,
+        preflight_failed,
+        print_preflight,
+        print_restore_plan,
+        print_restore_summary,
+    )
     
-    logger.section("Alfresco Restore Started")
+    logger.section("EisenVault Restore Started")
     logger.info(f"Configuration:")
     logger.info(f"  Backup directory: {config.backup_dir}")
-    logger.info(f"  Alfresco base directory: {config.alf_base_dir}")
-    logger.info(f"  Alfresco user: {config.alfresco_user}")
+    logger.info(f"  EisenVault restore folder: {config.alf_base_dir}")
+    logger.info(f"  EisenVault service account: {config.alfresco_user}")
     logger.info(f"  Log file: {log_file}")
+
+    print_restore_plan([
+        "Confirm the EisenVault restore folder and backup source.",
+        "Select the restore mode and backup timestamp/run.",
+        "Validate backup files, restore folder, and service prerequisites.",
+        "Stop Tomcat while keeping PostgreSQL available.",
+        "Back up current data that will be replaced.",
+        "Restore the selected database and/or contentstore data.",
+        "Clear Solr indexes when applicable.",
+        "Start Tomcat and report the restore result.",
+    ])
+    restore_folder_checks = collect_restore_folder_checks(Path(config.alf_base_dir))
+    print_preflight("EisenVault Restore Folder Checks", restore_folder_checks)
+    if preflight_failed(restore_folder_checks):
+        logger.error("Required EisenVault restore folder checks failed")
+        sys.exit(1)
     
     print("\n" + "=" * 80)
     print("  Restore Mode Selection")
     print("=" * 80)
     print("\nSelect restore path:")
-    print("  1. V2 multi-destination restore (restic complete-set)")
+    print("  1. Recommended complete backup restore")
     print("  2. Legacy restore (rsync/rclone backups)")
     
     while True:
@@ -1630,7 +1702,7 @@ def main():
         from alfresco_backup.v2.app_config import AppConfig
         from alfresco_backup.v2.restore_runner import run_v2_restore_interactive
         v2_config = AppConfig('.env', str(policies))
-        sys.exit(run_v2_restore_interactive(v2_config))
+        sys.exit(run_v2_restore_interactive(v2_config, Path(config.alf_base_dir), dry_run=args.dry_run))
 
     print("\nLegacy restore modes:")
     print("  1. Full system restore (PostgreSQL + Contentstore)")
@@ -1693,6 +1765,21 @@ def main():
             if not restore.validate_contentstore_backup(cs_timestamp):
                 logger.error("Contentstore backup validation failed")
                 sys.exit(1)
+
+            print_restore_summary(
+                Path(config.alf_base_dir),
+                "Legacy full system restore",
+                str(config.backup_dir if not config.s3_enabled else config.s3_bucket),
+                pg_timestamp,
+                os.getenv('PGHOST', 'localhost'),
+                os.getenv('PGPORT', '5432'),
+                os.getenv('PGUSER', 'alfresco'),
+                os.getenv('PGDATABASE', 'postgres'),
+                log_file,
+            )
+            if args.dry_run:
+                logger.info("Dry run complete. No services were stopped and no data was changed.")
+                sys.exit(0)
             
             logger.section("Restore Confirmation")
             logger.info("About to restore:")
@@ -1704,8 +1791,7 @@ def main():
             logger.warning("PostgreSQL must be running for database restore.")
             logger.info("")
             
-            confirm = input("Type 'RESTORE' to confirm: ").strip()
-            if confirm != 'RESTORE':
+            if not confirm_destructive_restore(Path(config.alf_base_dir)):
                 logger.info("Restore cancelled by user")
                 sys.exit(0)
             
@@ -1730,7 +1816,7 @@ def main():
             
             # Step 4: Verify PostgreSQL is running
             logger.section("Verifying PostgreSQL")
-            if not restore.verify_postgresql_running():
+            if not restore.ensure_postgresql_running():
                 logger.error("PostgreSQL is not running or not accepting connections")
                 logger.error("Cannot proceed with database restore")
                 sys.exit(1)
@@ -1835,6 +1921,21 @@ def main():
             if not restore.validate_postgres_backup(pg_timestamp):
                 logger.error("PostgreSQL backup validation failed")
                 sys.exit(1)
+
+            print_restore_summary(
+                Path(config.alf_base_dir),
+                "Legacy point-in-time restore",
+                str(config.s3_bucket),
+                pg_timestamp,
+                os.getenv('PGHOST', 'localhost'),
+                os.getenv('PGPORT', '5432'),
+                os.getenv('PGUSER', 'alfresco'),
+                os.getenv('PGDATABASE', 'postgres'),
+                log_file,
+            )
+            if args.dry_run:
+                logger.info("Dry run complete. No services were stopped and no data was changed.")
+                sys.exit(0)
             
             # Confirmation
             logger.section("Restore Confirmation")
@@ -1847,8 +1948,7 @@ def main():
             logger.warning("PostgreSQL must be running for database restore.")
             logger.info("")
             
-            confirm = input("Type 'RESTORE' to confirm: ").strip()
-            if confirm != 'RESTORE':
+            if not confirm_destructive_restore(Path(config.alf_base_dir)):
                 logger.info("Restore cancelled by user")
                 sys.exit(0)
             
@@ -1873,7 +1973,7 @@ def main():
             
             # Step 4: Verify PostgreSQL is running
             logger.section("Verifying PostgreSQL")
-            if not restore.verify_postgresql_running():
+            if not restore.ensure_postgresql_running():
                 logger.error("PostgreSQL is not running or not accepting connections")
                 logger.error("Cannot proceed with database restore")
                 sys.exit(1)
@@ -1946,6 +2046,21 @@ def main():
             if not restore.validate_postgres_backup(pg_timestamp):
                 logger.error("PostgreSQL backup validation failed")
                 sys.exit(1)
+
+            print_restore_summary(
+                Path(config.alf_base_dir),
+                "Legacy PostgreSQL-only restore",
+                str(config.backup_dir if not config.s3_enabled else config.s3_bucket),
+                pg_timestamp,
+                os.getenv('PGHOST', 'localhost'),
+                os.getenv('PGPORT', '5432'),
+                os.getenv('PGUSER', 'alfresco'),
+                os.getenv('PGDATABASE', 'postgres'),
+                log_file,
+            )
+            if args.dry_run:
+                logger.info("Dry run complete. No services were stopped and no data was changed.")
+                sys.exit(0)
             
             logger.section("Restore Confirmation")
             logger.info("About to restore PostgreSQL:")
@@ -1956,8 +2071,7 @@ def main():
             logger.warning("PostgreSQL must be running for database restore.")
             logger.info("")
             
-            confirm = input("Type 'RESTORE' to confirm: ").strip()
-            if confirm != 'RESTORE':
+            if not confirm_destructive_restore(Path(config.alf_base_dir)):
                 logger.info("Restore cancelled by user")
                 sys.exit(0)
             
@@ -1982,7 +2096,7 @@ def main():
             
             # Step 4: Verify PostgreSQL is running
             logger.section("Verifying PostgreSQL")
-            if not restore.verify_postgresql_running():
+            if not restore.ensure_postgresql_running():
                 logger.error("PostgreSQL is not running or not accepting connections")
                 logger.error("Cannot proceed with database restore")
                 sys.exit(1)

@@ -251,7 +251,7 @@ def create_env_file():
     print_info("You need to provide:")
     print_info("  - PostgreSQL connection details (host, port, user, password)")
     print_info("  - Backup destination (local directory or S3 bucket)")
-    print_info("  - Alfresco base directory path")
+    print_info("  - EisenVault source folder path")
     print_info("  - Retention policy (days)")
     print_info("  - Email alert settings (optional)")
     
@@ -325,14 +325,14 @@ def create_env_file():
             print_error(f"Directory does not exist: {backup_dir}")
             print_info("Please enter a valid backup directory path.")
     
-    # Collect Alfresco base directory (needed for auto-detection)
+    # Collect EisenVault source folder (needed for auto-detection)
     print_info("\n--- Alfresco Base Directory ---")
     while True:
-        alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory path: {Colors.ENDC}").strip()
+        alf_base_dir = input(f"{Colors.OKCYAN}EisenVault source folder path: {Colors.ENDC}").strip()
         if alf_base_dir and Path(alf_base_dir).exists():
             break
         print_error(f"Directory does not exist: {alf_base_dir}")
-        print_info("Please enter a valid Alfresco base directory path.")
+        print_info("Please enter a valid EisenVault source folder path.")
     
     # Try to auto-detect database settings from alfresco-global.properties
     print_info("\n--- Database Configuration ---")
@@ -467,7 +467,10 @@ PG_SYSTEM_USER={pg_system_user}
 # BACKUP_DIR is only required for local backups (not needed for S3 backups)
 # Leave empty if using S3 backup
 BACKUP_DIR={backup_dir if backup_dir else ''}
-ALF_BASE_DIR={alf_base_dir}
+EISENVAULT_SOURCE_DIR={alf_base_dir}
+EISENVAULT_RESTORE_DIR={alf_base_dir}
+# Optional legacy fallback. Set only if source and restore are the same installation.
+#ALF_BASE_DIR={alf_base_dir}
 
 # Retention Policy
 RETENTION_DAYS={retention_days}
@@ -689,11 +692,15 @@ def detect_db_settings_from_alfresco(alf_base_dir: Optional[str] = None) -> Opti
     if not alf_base_dir:
         # Try to get from existing .env or ask user
         config = load_env_config()
-        alf_base_dir = config.get('ALF_BASE_DIR')
+        alf_base_dir = (
+            config.get('EISENVAULT_SOURCE_DIR')
+            or config.get('ALF_SOURCE_DIR')
+            or config.get('ALF_BASE_DIR')
+        )
         
         if not alf_base_dir:
             # Ask for alf_base_dir first
-            alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory: {Colors.ENDC}").strip()
+            alf_base_dir = input(f"{Colors.OKCYAN}EisenVault source folder: {Colors.ENDC}").strip()
     
     if not alf_base_dir or not Path(alf_base_dir).exists():
         return None
@@ -1023,7 +1030,11 @@ def configure_postgresql():
     
     config = load_env_config()
     s3_enabled = bool(config.get('S3_BUCKET'))
-    alf_base_dir = config.get('ALF_BASE_DIR')
+    alf_base_dir = (
+        config.get('EISENVAULT_SOURCE_DIR')
+        or config.get('ALF_SOURCE_DIR')
+        or config.get('ALF_BASE_DIR')
+    )
     pg_user = config.get('PGUSER', 'alfresco')
     
     if s3_enabled:
@@ -1034,7 +1045,7 @@ def configure_postgresql():
     backup_dir = config.get('BACKUP_DIR')
     
     if not backup_dir or not alf_base_dir:
-        print_error("BACKUP_DIR or ALF_BASE_DIR not found in .env file")
+        print_error("BACKUP_DIR and EisenVault source folder not found in .env file")
         return False
 
     wal_dir = str(Path(backup_dir) / 'pg_wal')
@@ -1468,8 +1479,14 @@ def verify_installation():
         print_success(".env file exists")
         config = load_env_config()
         
-        required_settings = ['ALF_BASE_DIR', 'PGUSER', 'PGHOST', 'PGPORT', 'PGPASSWORD']
+        required_settings = ['PGUSER', 'PGHOST', 'PGPORT', 'PGPASSWORD']
         missing = [s for s in required_settings if not config.get(s)]
+        if not (
+            config.get('EISENVAULT_SOURCE_DIR')
+            or config.get('ALF_SOURCE_DIR')
+            or config.get('ALF_BASE_DIR')
+        ):
+            missing.append('EISENVAULT_SOURCE_DIR or ALF_BASE_DIR')
         if missing:
             print_error(f"Missing required settings in .env: {', '.join(missing)}")
             checks.append(False)
@@ -1529,8 +1546,12 @@ def verify_installation():
         checks.append(False)
     
     # Check contentstore path
-    alf_base_dir = config.get('ALF_BASE_DIR')
-    print_info("\n[4/6] Checking Alfresco contentstore path...")
+    alf_base_dir = (
+        config.get('EISENVAULT_SOURCE_DIR')
+        or config.get('ALF_SOURCE_DIR')
+        or config.get('ALF_BASE_DIR')
+    )
+    print_info("\n[4/6] Checking EisenVault source contentstore path...")
     if alf_base_dir:
         contentstore_path = Path(alf_base_dir) / 'alf_data' / 'contentstore'
         if contentstore_path.exists():
@@ -1538,10 +1559,10 @@ def verify_installation():
             checks.append(True)
         else:
             print_error(f"Contentstore not found: {contentstore_path}")
-            print_info("  Verify ALF_BASE_DIR is correct in .env")
+            print_info("  Verify EISENVAULT_SOURCE_DIR or ALF_BASE_DIR is correct in .env")
             checks.append(False)
     else:
-        print_warning("Cannot verify contentstore - ALF_BASE_DIR not set")
+        print_warning("Cannot verify contentstore - EISENVAULT_SOURCE_DIR not set")
         checks.append(False)
     
     # Check backup script permissions
@@ -1616,7 +1637,7 @@ def create_restore_env_file():
     print_info("\nThe restore script needs the following information:")
     print_info("  - PostgreSQL connection details (host, port, user, password, database)")
     print_info("  - Backup location (local directory or S3 bucket)")
-    print_info("  - Alfresco base directory (target for restore)")
+    print_info("  - EisenVault restore folder (target for restore)")
     print_info("  - Alfresco OS user (for file ownership)")
     
     if not ask_yes_no("\nConfigure restore settings now?"):
@@ -1687,11 +1708,11 @@ def create_restore_env_file():
             print_info("Please enter a valid backup directory path.")
     
     while True:
-        alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory path: {Colors.ENDC}").strip()
+        alf_base_dir = input(f"{Colors.OKCYAN}EisenVault restore folder path: {Colors.ENDC}").strip()
         if alf_base_dir and Path(alf_base_dir).exists():
             break
         print_error(f"Directory does not exist: {alf_base_dir}")
-        print_info("Please enter a valid Alfresco base directory path.")
+        print_info("Please enter a valid EisenVault restore folder path.")
     
     # Try to auto-detect database settings from alfresco-global.properties
     print_info("\n--- PostgreSQL Configuration ---")
@@ -1757,7 +1778,9 @@ PGDATABASE={pg_database}
 # BACKUP_DIR is only required for local backups (not needed for S3 backups)
 # Leave empty if using S3 restore
 BACKUP_DIR={backup_dir if backup_dir else ''}
-ALF_BASE_DIR={alf_base_dir}
+EISENVAULT_RESTORE_DIR={alf_base_dir}
+# Optional legacy fallback. Set only if source and restore are the same installation.
+#ALF_BASE_DIR={alf_base_dir}
 
 # S3 Backup Configuration (optional)
 # If S3_BUCKET is set, restore will download backups from S3
@@ -1832,7 +1855,7 @@ def setup_restore_only():
         print_info("Restore configuration saved to .env file:")
         print_info("  - PostgreSQL credentials")
         print_info("  - Backup directory path")
-        print_info("  - Alfresco base directory path")
+        print_info("  - EisenVault source folder path")
         print_info("  - Alfresco OS user")
     print_info("\nYou can now run the restore script:")
     print_info("  python restore.py")
@@ -1919,7 +1942,7 @@ def create_base_env_file() -> bool:
 
     print_info("\n--- Alfresco Base Directory ---")
     while True:
-        alf_base_dir = input(f"{Colors.OKCYAN}Alfresco base directory path: {Colors.ENDC}").strip()
+        alf_base_dir = input(f"{Colors.OKCYAN}EisenVault source folder path: {Colors.ENDC}").strip()
         if alf_base_dir and Path(alf_base_dir).exists():
             break
         print_error(f"Directory does not exist: {alf_base_dir}")
@@ -1975,7 +1998,10 @@ PGPASSWORD={pg_password}
 PGDATABASE={pg_database}
 PGSUPERUSER={pg_superuser}
 
-# Alfresco paths
+# EisenVault paths
+EISENVAULT_SOURCE_DIR={alf_base_dir}
+EISENVAULT_RESTORE_DIR={alf_base_dir}
+# Legacy fallback for older scripts/configs
 ALF_BASE_DIR={alf_base_dir}
 
 # Customer name (optional, email subject)
@@ -2219,4 +2245,3 @@ if __name__ == '__main__':
     except Exception as e:
         print_error(f"\nUnexpected error: {e}")
         sys.exit(1)
-

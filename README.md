@@ -62,7 +62,9 @@ Configuration is stored in `.env` file. Key settings:
 
 **Required in `.env`:**
 - `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD` - PostgreSQL connection
-- `ALF_BASE_DIR` - Path to Alfresco installation
+- `EISENVAULT_SOURCE_DIR` - live/source EisenVault installation to back up
+- `EISENVAULT_RESTORE_DIR` - EisenVault installation to restore into
+- `ALF_BASE_DIR` - legacy fallback when source and restore are the same
 
 **Required in `backup-policies.yml`:**
 - One or more restic destinations (`filesystem` or `object_storage`)

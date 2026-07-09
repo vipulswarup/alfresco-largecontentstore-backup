@@ -50,7 +50,7 @@ def query_content_urls(config: AppConfig) -> List[str]:
         '-t', '-A',
         '-c', sql,
     ]
-    embedded_psql = config.alf_base_dir / 'postgresql' / 'bin' / 'psql'
+    embedded_psql = config.restore_alf_base_dir / 'postgresql' / 'bin' / 'psql'
     if embedded_psql.exists():
         cmd[0] = str(embedded_psql)
 

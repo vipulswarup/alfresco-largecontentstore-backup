@@ -22,6 +22,14 @@ from .schedule import validate_schedule_fields
 POLICIES_FILENAME = 'backup-policies.yml'
 CONFIG_VERSION = 1
 ENV_VAR_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+SOURCE_DIR_VARS = ('EISENVAULT_SOURCE_DIR', 'ALF_SOURCE_DIR', 'ALF_BASE_DIR')
+RESTORE_DIR_VARS = (
+    'EISENVAULT_RESTORE_DIR',
+    'ALF_RESTORE_DIR',
+    'EISENVAULT_SOURCE_DIR',
+    'ALF_SOURCE_DIR',
+    'ALF_BASE_DIR',
+)
 
 
 def _validate_env_var_name(value: str, context: str) -> None:
@@ -30,6 +38,14 @@ def _validate_env_var_name(value: str, context: str) -> None:
             f"{context}: invalid environment variable name '{value}'. "
             "Use letters, numbers, and underscores only, and do not start with a number."
         )
+
+
+def _first_env(names) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return ''
 
 
 class AppConfig:
@@ -54,7 +70,7 @@ class AppConfig:
                 "Run setup.py to create or migrate configuration."
             )
 
-        load_dotenv(self.env_file)
+        load_dotenv(self.env_file, override=True)
         self._env = {k: v for k, v in os.environ.items() if v is not None}
 
         with open(self.policies_file, 'r', encoding='utf-8') as f:
@@ -167,8 +183,10 @@ class AppConfig:
             )
 
     def _validate_env_secrets(self) -> None:
-        required = ['PGHOST', 'PGPORT', 'PGUSER', 'PGPASSWORD', 'ALF_BASE_DIR']
+        required = ['PGHOST', 'PGPORT', 'PGUSER', 'PGPASSWORD']
         missing = [v for v in required if not os.getenv(v)]
+        if not _first_env(SOURCE_DIR_VARS) and not _first_env(RESTORE_DIR_VARS):
+            missing.append('EISENVAULT_SOURCE_DIR or EISENVAULT_RESTORE_DIR')
         if missing:
             print(f"ERROR: Missing required environment variables: {', '.join(missing)}")
             sys.exit(1)
@@ -194,12 +212,20 @@ class AppConfig:
                     )
 
     def _validate_paths(self) -> None:
-        alf_base = Path(os.getenv('ALF_BASE_DIR', ''))
-        if not alf_base.exists():
-            raise ValueError(f"ALF_BASE_DIR does not exist: {alf_base}")
-        cs = alf_base / 'alf_data' / 'contentstore'
-        if not cs.exists():
-            raise ValueError(f"Contentstore does not exist: {cs}")
+        source_value = _first_env(SOURCE_DIR_VARS)
+        restore_value = _first_env(RESTORE_DIR_VARS)
+        source_base = Path(source_value) if source_value else None
+        restore_base = Path(restore_value) if restore_value else None
+
+        if source_base is not None and not source_base.exists():
+            raise ValueError(f"EISENVAULT_SOURCE_DIR does not exist: {source_base}")
+        if restore_base is not None and not restore_base.exists():
+            raise ValueError(f"EISENVAULT_RESTORE_DIR does not exist: {restore_base}")
+
+        if source_base is not None:
+            cs = source_base / 'alf_data' / 'contentstore'
+            if not cs.exists():
+                raise ValueError(f"Source contentstore does not exist: {cs}")
 
         for policy in self.backup_policies:
             if policy.destination_type == 'filesystem' and policy.repository_path:
@@ -243,11 +269,23 @@ class AppConfig:
 
     @property
     def alf_base_dir(self) -> Path:
-        return Path(os.getenv('ALF_BASE_DIR', ''))
+        return self.source_alf_base_dir
+
+    @property
+    def source_alf_base_dir(self) -> Path:
+        return Path(_first_env(SOURCE_DIR_VARS))
+
+    @property
+    def restore_alf_base_dir(self) -> Path:
+        return Path(_first_env(RESTORE_DIR_VARS))
 
     @property
     def contentstore_path(self) -> Path:
-        return self.alf_base_dir / 'alf_data' / 'contentstore'
+        return self.source_alf_base_dir / 'alf_data' / 'contentstore'
+
+    @property
+    def restore_contentstore_path(self) -> Path:
+        return self.restore_alf_base_dir / 'alf_data' / 'contentstore'
 
     @property
     def customer_name(self) -> str:

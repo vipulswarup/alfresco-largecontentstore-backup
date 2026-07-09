@@ -14,7 +14,7 @@ class BackupConfig:
         if env_file:
             if not os.path.exists(env_file):
                 raise FileNotFoundError(f"Environment file not found: {env_file}")
-            load_dotenv(env_file)
+            load_dotenv(env_file, override=True)
         else:
             load_dotenv()
         
@@ -24,8 +24,15 @@ class BackupConfig:
         """Load environment variables and validate required fields."""
         required_vars = [
             'PGHOST', 'PGPORT', 'PGUSER', 'PGPASSWORD',
-            'ALF_BASE_DIR', 'RETENTION_DAYS'
+            'RETENTION_DAYS'
         ]
+        source_dir = (
+            os.getenv('EISENVAULT_SOURCE_DIR')
+            or os.getenv('ALF_SOURCE_DIR')
+            or os.getenv('ALF_BASE_DIR')
+        )
+        if not source_dir:
+            required_vars.append('EISENVAULT_SOURCE_DIR or ALF_BASE_DIR')
         
         # BACKUP_DIR is only required if S3 is not enabled
         s3_bucket = os.getenv('S3_BUCKET')
@@ -65,7 +72,14 @@ class BackupConfig:
             # BACKUP_DIR is optional if S3 is enabled
             self.backup_dir = None
         
-        self.alf_base_dir = Path(os.getenv('ALF_BASE_DIR'))
+        self.alf_base_dir = Path(source_dir)
+        self.source_alf_base_dir = self.alf_base_dir
+        restore_dir = (
+            os.getenv('EISENVAULT_RESTORE_DIR')
+            or os.getenv('ALF_RESTORE_DIR')
+            or source_dir
+        )
+        self.restore_alf_base_dir = Path(restore_dir)
         
         # Retention settings
         try:
@@ -148,11 +162,10 @@ class BackupConfig:
             sys.exit(1)
         
         if not self.alf_base_dir.exists():
-            print(f"ERROR: Alfresco base directory does not exist: {self.alf_base_dir}")
+            print(f"ERROR: EisenVault source folder does not exist: {self.alf_base_dir}")
             sys.exit(1)
         
         contentstore = self.alf_base_dir / 'alf_data' / 'contentstore'
         if not contentstore.exists():
             print(f"ERROR: Contentstore directory does not exist: {contentstore}")
             sys.exit(1)
-

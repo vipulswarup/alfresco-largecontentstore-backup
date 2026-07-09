@@ -82,7 +82,10 @@ PGSUPERUSER=postgres
 
 # Paths
 BACKUP_DIR=/mnt/backups/alfresco
-ALF_BASE_DIR=/opt/alfresco
+EISENVAULT_SOURCE_DIR=/opt/eisenvault-source
+EISENVAULT_RESTORE_DIR=/opt/eisenvault-restore
+# Legacy fallback when source and restore are the same:
+ALF_BASE_DIR=/opt/eisenvault
 
 # Retention Policy
 RETENTION_DAYS=7
@@ -122,7 +125,9 @@ The system will automatically use embedded PostgreSQL binaries if available (e.g
 | --- | --- |
 | `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` | Connection parameters for Alfresco's PostgreSQL instance. |
 | `BACKUP_DIR` | Root directory for storing backups (`postgres/`, `contentstore/`). |
-| `ALF_BASE_DIR` | Alfresco installation directory containing scripts and data. |
+| `EISENVAULT_SOURCE_DIR` | Live/source EisenVault installation used for backups. |
+| `EISENVAULT_RESTORE_DIR` | Target EisenVault installation used for restores. |
+| `ALF_BASE_DIR` | Legacy fallback when source and restore are the same. |
 | `RETENTION_DAYS` | Number of days to retain backups before cleanup (default: 7). |
 | `EMAIL_ALERT_MODE` | Email alert mode: `both` (success and failure), `failure_only` (failure only, default), or `none` (disabled). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | SMTP credentials for email notifications (required if email alerts are enabled). |
