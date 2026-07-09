@@ -121,12 +121,31 @@ def _add_filesystem_destination(policies_path: Path, name: str = None) -> None:
     if not name:
         name = input("Policy name: ").strip()
     repo_path = input("Repository path: ").strip()
+    existing = _find_existing_filesystem_policy(doc, name, repo_path)
+    if existing:
+        reason = (
+            "same policy name"
+            if existing.get('name') == name
+            else f"same repository path ({repo_path})"
+        )
+        print(f"Destination already exists ({reason}): {existing.get('name')}")
+        if input("Update this existing destination instead of adding a duplicate? [Y/n]: ").strip().lower() in ('n', 'no'):
+            print("Skipped duplicate destination.")
+            return
+        if existing.get('name') != name:
+            print(f"Keeping existing policy name: {existing.get('name')}")
+            name = existing.get('name')
+
     retention = input("Retention days [15]: ").strip() or '15'
     backup_time = input("Daily backup time HH:MM [02:00]: ").strip() or '02:00'
     enc = _ask_encryption_enabled()
     password_env = None
     if enc:
-        password_env = _restic_password_env_name(name)
+        password_env = (
+            existing.get('encryption', {}).get('password_env')
+            if existing
+            else _restic_password_env_name(name)
+        )
         print(f"Restic password will be stored in .env as: {password_env}")
         _ensure_env_secret(
             Path('.env'),
@@ -136,7 +155,7 @@ def _add_filesystem_destination(policies_path: Path, name: str = None) -> None:
     else:
         print("WARNING: Unencrypted repository is insecure-by-choice.")
 
-    doc.setdefault('backup_policies', []).append({
+    policy_doc = {
         'name': name,
         'enabled': True,
         'destination_type': 'filesystem',
@@ -144,8 +163,17 @@ def _add_filesystem_destination(policies_path: Path, name: str = None) -> None:
         'encryption': {'enabled': enc, 'password_env': password_env},
         'backup_time': backup_time,
         'retention_days': int(retention),
-        'priority': 10 + len(doc.get('backup_policies', [])),
-    })
+        'priority': (
+            existing.get('priority')
+            if existing
+            else 10 + len(doc.get('backup_policies', []))
+        ),
+    }
+    if existing:
+        existing.clear()
+        existing.update(policy_doc)
+    else:
+        doc.setdefault('backup_policies', []).append(policy_doc)
     _save_policies(policies_path, doc)
 
 
@@ -206,6 +234,19 @@ def _restic_password_env_name(policy_name: str) -> str:
     if not suffix:
         suffix = 'POLICY'
     return f"RESTIC_PASSWORD_{suffix}"
+
+
+def _find_existing_filesystem_policy(doc: dict, name: str, repo_path: str) -> dict:
+    resolved_repo = str(Path(repo_path).expanduser())
+    for policy in doc.get('backup_policies', []):
+        if policy.get('destination_type') != 'filesystem':
+            continue
+        if policy.get('name') == name:
+            return policy
+        existing_repo = str(Path(policy.get('repository_path', '')).expanduser())
+        if existing_repo == resolved_repo:
+            return policy
+    return {}
 
 
 def _normalize_env_key(key: str) -> str:

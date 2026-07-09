@@ -86,6 +86,48 @@ def test_app_config_validation(tmp_path, monkeypatch):
     assert len(cfg.enabled_policies()) == 1
 
 
+def test_app_config_rejects_duplicate_enabled_filesystem_repositories(tmp_path, monkeypatch):
+    env = tmp_path / '.env'
+    policies = tmp_path / 'backup-policies.yml'
+    cs = tmp_path / 'alf_data' / 'contentstore'
+    cs.mkdir(parents=True)
+    env.write_text(
+        f"PGHOST=localhost\nPGPORT=5432\nPGUSER=a\nPGPASSWORD=b\n"
+        f"ALF_BASE_DIR={tmp_path}\n"
+    )
+    repo = tmp_path / 'repo'
+    policies.write_text(yaml.dump({
+        'config_version': 1,
+        'global': {'staging_dir': str(tmp_path / 'staging'), 'max_parallel_destinations': 2},
+        'credential_profiles': [],
+        'backup_policies': [
+            {
+                'name': 'local',
+                'enabled': True,
+                'destination_type': 'filesystem',
+                'repository_path': str(repo),
+                'encryption': {'enabled': False, 'password_env': None},
+                'backup_time': '02:00',
+                'retention_days': 7,
+                'priority': 10,
+            },
+            {
+                'name': 'local-copy',
+                'enabled': True,
+                'destination_type': 'filesystem',
+                'repository_path': str(repo),
+                'encryption': {'enabled': False, 'password_env': None},
+                'backup_time': '02:30',
+                'retention_days': 14,
+                'priority': 11,
+            },
+        ],
+    }))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match='Duplicate enabled filesystem destinations'):
+        AppConfig(str(env), str(policies))
+
+
 def test_app_config_separates_source_and_restore_dirs(tmp_path, monkeypatch):
     source = tmp_path / 'source'
     restore = tmp_path / 'restore'

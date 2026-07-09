@@ -1504,15 +1504,23 @@ def verify_installation():
         print_success("backup-policies.yml exists")
         try:
             import yaml
+            from alfresco_backup.v2.app_config import AppConfig
+            from alfresco_backup.v2.setup_wizard import _ensure_policy_passwords
+
             with open(policies_file) as f:
                 doc = yaml.safe_load(f) or {}
             count = len(doc.get('backup_policies', []))
             print_info(f"  {count} destination(s) configured")
-            checks.append(count > 0)
             if count == 0:
                 print_error("  No destinations; use setup menu 3, 4, or 5")
+                checks.append(False)
+            else:
+                _ensure_policy_passwords(env_file, policies_file)
+                AppConfig(str(env_file), str(policies_file))
+                print_success("  Destination configuration is usable")
+                checks.append(True)
         except Exception as e:
-            print_error(f"  Invalid YAML: {e}")
+            print_error(f"  Destination configuration issue: {e}")
             checks.append(False)
     else:
         print_error("backup-policies.yml missing (use setup menu 3 or 4)")

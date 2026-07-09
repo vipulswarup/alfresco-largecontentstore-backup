@@ -3,7 +3,11 @@
 from pathlib import Path
 
 from alfresco_backup.v2 import setup_menu
-from alfresco_backup.v2.setup_wizard import _ensure_policy_passwords
+from alfresco_backup.v2.setup_wizard import (
+    _add_filesystem_destination,
+    _ensure_policy_passwords,
+    _load_policies,
+)
 
 
 def test_multiple_destinations_reuses_entered_policy_name(tmp_path, monkeypatch):
@@ -52,3 +56,42 @@ backup_policies:
     content = env_path.read_text()
     assert 'RESTIC_PASSWORD_BAK_1WEEK=secret' in content
     assert 'RESTIC_PASSWORD_BAK1WEEK=secret' in content
+
+
+def test_add_filesystem_destination_updates_duplicate_repo_path(tmp_path, monkeypatch):
+    policies_path = tmp_path / 'backup-policies.yml'
+    policies_path.write_text("""
+config_version: 1
+global: {}
+credential_profiles: []
+backup_policies:
+  - name: bak1week
+    enabled: true
+    destination_type: filesystem
+    repository_path: /mnt/bak-1week
+    encryption:
+      enabled: true
+      password_env: RESTIC_PASSWORD_BAK1WEEK
+    backup_time: "02:00"
+    retention_days: 7
+    priority: 10
+""")
+    env_path = tmp_path / '.env'
+    env_path.write_text('RESTIC_PASSWORD_BAK1WEEK=secret\n')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('alfresco_backup.v2.setup_wizard._ask_encryption_enabled', lambda: True)
+    answers = iter([
+        '/mnt/bak-1week',
+        '',
+        '14',
+        '02:30',
+    ])
+    monkeypatch.setattr('builtins.input', lambda _prompt='': next(answers))
+
+    _add_filesystem_destination(policies_path, name='bak-1week')
+
+    policies = _load_policies(policies_path)['backup_policies']
+    assert len(policies) == 1
+    assert policies[0]['name'] == 'bak1week'
+    assert policies[0]['retention_days'] == 14
+    assert policies[0]['backup_time'] == '02:30'

@@ -88,6 +88,7 @@ class AppConfig:
         self._parse_global(raw.get('global', {}))
         self._parse_credential_profiles(raw.get('credential_profiles', []))
         self._parse_backup_policies(raw.get('backup_policies', []))
+        self._validate_unique_destinations()
         self._validate_env_secrets()
         self._validate_paths()
 
@@ -188,6 +189,33 @@ class AppConfig:
                     maintenance=maintenance,
                     priority=int(p.get('priority', 100)),
                 )
+            )
+
+    def _validate_unique_destinations(self) -> None:
+        filesystem_repos: Dict[str, List[str]] = {}
+        for policy in self.backup_policies:
+            if (
+                not policy.enabled
+                or policy.destination_type != 'filesystem'
+                or not policy.repository_path
+            ):
+                continue
+            repo_key = str(Path(policy.repository_path).expanduser())
+            filesystem_repos.setdefault(repo_key, []).append(policy.name)
+
+        duplicates = [
+            (repo, names)
+            for repo, names in filesystem_repos.items()
+            if len(names) > 1
+        ]
+        if duplicates:
+            details = '; '.join(
+                f"{', '.join(names)} use {repo}"
+                for repo, names in duplicates
+            )
+            raise ValueError(
+                "Duplicate enabled filesystem destinations in backup-policies.yml: "
+                f"{details}. Remove or disable duplicates before running backup."
             )
 
     def _validate_env_secrets(self) -> None:

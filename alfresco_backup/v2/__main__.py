@@ -46,7 +46,15 @@ def main(force_all_destinations: bool = False) -> None:
         )
         sys.exit(1)
 
-    config = AppConfig(str(env_path), str(policies_path))
+    from .setup_wizard import _ensure_policy_passwords
+    _ensure_policy_passwords(env_path, policies_path)
+
+    try:
+        config = AppConfig(str(env_path), str(policies_path))
+    except Exception as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
     setup_logging(config.global_config.staging_dir)
 
     logging.info("=" * 70)
