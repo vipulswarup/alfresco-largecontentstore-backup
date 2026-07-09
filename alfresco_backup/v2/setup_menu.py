@@ -123,8 +123,8 @@ def create_multiple_destinations_policy(policies_path: Path, env_path: Path) -> 
         print("  1. Filesystem  2. Object storage")
         t = input("Type [1]: ").strip() or '1'
         if t == '2':
-            _add_object_storage_destination(env_path, policies_path)
+            _add_object_storage_destination(env_path, policies_path, name=name)
         else:
-            _add_filesystem_destination(policies_path)
+            _add_filesystem_destination(policies_path, name=name)
 
     _init_repos(env_path, policies_path)

@@ -114,9 +114,10 @@ def _init_repos(env_path: Path, policies_path: Path) -> None:
             print(f"    {r.get('error', 'unknown error')}")
 
 
-def _add_filesystem_destination(policies_path: Path) -> None:
+def _add_filesystem_destination(policies_path: Path, name: str = None) -> None:
     doc = _load_policies(policies_path)
-    name = input("Policy name: ").strip()
+    if not name:
+        name = input("Policy name: ").strip()
     repo_path = input("Repository path: ").strip()
     retention = input("Retention days [15]: ").strip() or '15'
     backup_time = input("Daily backup time HH:MM [02:00]: ").strip() or '02:00'
@@ -146,7 +147,7 @@ def _add_filesystem_destination(policies_path: Path) -> None:
     _save_policies(policies_path, doc)
 
 
-def _add_object_storage_destination(env_path: Path, policies_path: Path) -> None:
+def _add_object_storage_destination(env_path: Path, policies_path: Path, name: str = None) -> None:
     doc = _load_policies(policies_path)
     profile_name = input("Credential profile name: ").strip()
     endpoint = input("Endpoint URL: ").strip()
@@ -166,7 +167,8 @@ def _add_object_storage_destination(env_path: Path, policies_path: Path) -> None
         'secret_key_env': secret_env,
     })
 
-    name = input("Policy name: ").strip()
+    if not name:
+        name = input("Policy name: ").strip()
     prefix = input("Repository prefix: ").strip()
     retention = input("Retention days [180]: ").strip() or '180'
     backup_time = input("Daily backup time HH:MM [02:30]: ").strip() or '02:30'
