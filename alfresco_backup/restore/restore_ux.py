@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -256,3 +257,30 @@ def ask_yes_no(prompt: str, default: bool = True) -> bool:
     if not answer:
         return default
     return answer in ('y', 'yes')
+
+
+class TeeOutput:
+    """Write terminal output to both the terminal and the restore log."""
+
+    def __init__(self, primary, secondary):
+        self.primary = primary
+        self.secondary = secondary
+
+    def write(self, data):
+        self.primary.write(data)
+        self.secondary.write(data)
+
+    def flush(self):
+        self.primary.flush()
+        self.secondary.flush()
+
+    def isatty(self):
+        return getattr(self.primary, 'isatty', lambda: False)()
+
+
+def install_output_tee(log_file: Path):
+    """Append subsequent print/stdout/stderr output to log_file."""
+    handle = open(log_file, 'a', encoding='utf-8')
+    sys.stdout = TeeOutput(sys.stdout, handle)
+    sys.stderr = TeeOutput(sys.stderr, handle)
+    return handle

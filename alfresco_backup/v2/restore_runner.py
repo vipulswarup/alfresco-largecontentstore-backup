@@ -262,6 +262,13 @@ def run_v2_restore_interactive(config: AppConfig, alf_base: Path = None, dry_run
                 print(f"  {s}")
             print(f"\n{PRODUCT_NAME} startup blocked.")
             session_data['last_completed_step'] = 'integrity_failed'
+            session_data['last_error'] = (
+                f"Content integrity verification failed: "
+                f"{len(report.unresolved_paths)} unresolved content file(s)."
+            )
+            session_data['unresolved_content_count'] = len(report.unresolved_paths)
+            session_data['unresolved_content_examples'] = report.unresolved_paths[:20]
+            session_data['sources_searched'] = report.sources_searched
             save_restore_session(session_data)
             print_failure_guidance(alf_base)
             return 1

@@ -1652,11 +1652,13 @@ def main():
     from alfresco_backup.restore.restore_ux import (
         confirm_destructive_restore,
         collect_restore_folder_checks,
+        install_output_tee,
         preflight_failed,
         print_preflight,
         print_restore_plan,
         print_restore_summary,
     )
+    install_output_tee(log_file)
     
     logger.section("EisenVault Restore Started")
     logger.info(f"Configuration:")

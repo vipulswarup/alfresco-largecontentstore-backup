@@ -6,6 +6,7 @@ from alfresco_backup.restore.restore_ux import (
     PreflightCheck,
     clear_restore_session,
     confirm_destructive_restore,
+    install_output_tee,
     preflight_failed,
     save_restore_session,
     load_restore_session,
@@ -44,3 +45,25 @@ def test_restore_session_roundtrip(tmp_path):
     assert load_restore_session(session_path) == data
     clear_restore_session(session_path)
     assert load_restore_session(session_path) is None
+
+
+def test_install_output_tee_appends_stdout(tmp_path, monkeypatch):
+    import sys
+    import io
+
+    log_file = tmp_path / 'restore.log'
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    fake_stdout = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', fake_stdout)
+    handle = install_output_tee(log_file)
+    try:
+        print('visible in both places')
+        sys.stdout.flush()
+    finally:
+        handle.close()
+        monkeypatch.setattr(sys, 'stdout', original_stdout)
+        monkeypatch.setattr(sys, 'stderr', original_stderr)
+
+    assert 'visible in both places' in fake_stdout.getvalue()
+    assert 'visible in both places' in log_file.read_text(encoding='utf-8')
