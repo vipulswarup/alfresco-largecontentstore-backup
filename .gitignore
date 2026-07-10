@@ -136,3 +136,6 @@ Thumbs.db
 # Project specific
 *.lock
 backup_lock
+
+restore-session.json
+backup-policies.yml
