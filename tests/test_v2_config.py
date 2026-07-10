@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from alfresco_backup.v2.app_config import AppConfig
-from alfresco_backup.v2.integrity import content_url_to_path
+from alfresco_backup.v2.integrity import content_url_to_path, query_content_urls
 from alfresco_backup.v2.migration import migrate_legacy_env, needs_migration
 from alfresco_backup.v2.restore_planner import RestorePlanner, _tag_value
 from alfresco_backup.v2.schedule import (
@@ -229,6 +229,35 @@ def test_content_url_mapping(tmp_path):
     root = tmp_path / 'contentstore'
     p = content_url_to_path('store://2024/01/15/10/30/abc.bin', root)
     assert p == root / '2024/01/15/10/30/abc.bin'
+
+
+def test_query_content_urls_only_checks_referenced_content(monkeypatch, tmp_path):
+    class Config:
+        pgpassword = 'secret'
+        pghost = 'localhost'
+        pgport = '5432'
+        pguser = 'alfresco'
+        pgdatabase = 'alfresco'
+        restore_alf_base_dir = tmp_path
+
+    captured = {}
+
+    def fake_run(cmd, env, capture_output, text, timeout):
+        captured['cmd'] = cmd
+
+        class Proc:
+            returncode = 0
+            stdout = 'store://2026/7/2/12/8/live.bin\n'
+            stderr = ''
+
+        return Proc()
+
+    monkeypatch.setattr('alfresco_backup.v2.integrity.subprocess.run', fake_run)
+
+    assert query_content_urls(Config()) == ['store://2026/7/2/12/8/live.bin']
+    sql = captured['cmd'][-1]
+    assert 'JOIN alf_content_data cd ON cd.content_url_id = cu.id' in sql
+    assert 'SELECT DISTINCT cu.content_url' in sql
 
 
 def test_tag_value():

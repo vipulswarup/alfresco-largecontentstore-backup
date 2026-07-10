@@ -38,9 +38,14 @@ def content_url_to_path(content_url: str, contentstore_root: Path) -> Optional[P
 
 
 def query_content_urls(config: AppConfig) -> List[str]:
-    """Query alf_content_url from restored database."""
+    """Query content URLs that are still referenced by restored content data."""
     env = {'PGPASSWORD': config.pgpassword, 'PATH': os.environ.get('PATH', '')}
-    sql = "SELECT content_url FROM alf_content_url WHERE content_url IS NOT NULL;"
+    sql = (
+        "SELECT DISTINCT cu.content_url "
+        "FROM alf_content_url cu "
+        "JOIN alf_content_data cd ON cd.content_url_id = cu.id "
+        "WHERE cu.content_url IS NOT NULL;"
+    )
     cmd = [
         'psql',
         '-h', config.pghost,
