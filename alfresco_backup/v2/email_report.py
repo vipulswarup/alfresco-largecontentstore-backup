@@ -12,8 +12,13 @@ from .models import RunResult
 logger = logging.getLogger(__name__)
 
 
-def _format_mb(size_bytes: int) -> str:
-    return f"{size_bytes / (1024 * 1024):.2f} MB"
+def _format_size(size_bytes: int) -> str:
+    """Render sizes in the most useful unit while preferring megabytes."""
+    if size_bytes >= 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+    if size_bytes >= 1024:
+        return f"{size_bytes / 1024:.2f} KB"
+    return f"{size_bytes} bytes"
 
 
 def send_run_report(config: AppConfig, run_result: RunResult) -> None:
@@ -52,7 +57,7 @@ def send_run_report(config: AppConfig, run_result: RunResult) -> None:
         if d.duration_seconds:
             lines.append(f"  Duration: {d.duration_seconds:.1f}s")
         if d.bytes_processed:
-            lines.append(f"  Processed: {_format_mb(d.bytes_processed)}")
+            lines.append(f"  Processed: {_format_size(d.bytes_processed)}")
         if d.lock_contention:
             lines.append("  Lock contention: yes")
         if d.error:
@@ -75,7 +80,7 @@ def send_run_report(config: AppConfig, run_result: RunResult) -> None:
             "SHARED PG_DUMP",
             "=" * 60,
             f"  sha256: {run_result.pg_dump.get('sha256', '')}",
-            f"  size: {_format_mb(int(run_result.pg_dump.get('size_bytes', 0)))}",
+            f"  size: {_format_size(int(run_result.pg_dump.get('size_bytes', 0)))}",
         ])
 
     body = "\n".join(lines)

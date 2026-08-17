@@ -1,6 +1,7 @@
 """V2 backup orchestration."""
 
 import logging
+import shutil
 import socket
 import sys
 import uuid
@@ -23,6 +24,17 @@ logger = logging.getLogger(__name__)
 
 def _policy_staging(base: Path, policy_name: str) -> Path:
     return base / policy_name
+
+
+def _cleanup_run_staging(staging: Path) -> None:
+    """Remove run-specific temporary dumps and metadata after a backup finishes."""
+    try:
+        shutil.rmtree(staging)
+        logger.info("Removed temporary backup staging directory: %s", staging)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning("Could not remove temporary staging directory %s: %s", staging, exc)
 
 
 def run_backup(config: AppConfig, force: bool = False) -> RunResult:
@@ -51,6 +63,7 @@ def run_backup(config: AppConfig, force: bool = False) -> RunResult:
     lock_path = config.global_config.staging_dir / 'backup-v2.lock'
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
+    staging = None
     try:
         with FileLock(str(lock_path)):
             if not due_backup and not due_maint:
@@ -132,6 +145,12 @@ def run_backup(config: AppConfig, force: bool = False) -> RunResult:
     except RuntimeError as e:
         logger.error(f"Could not acquire lock: {e}")
         sys.exit(1)
+    finally:
+        # The staged shared dump, its per-destination copies, and metadata have
+        # all been written into the restic snapshots by this point. Delete them
+        # even on failure so a failed or partial run cannot fill local storage.
+        if staging is not None:
+            _cleanup_run_staging(staging)
 
 
 def _run_destinations_parallel(config, policies, ctx, pg_dump):
