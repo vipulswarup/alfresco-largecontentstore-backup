@@ -13,6 +13,8 @@ import shutil
 from pathlib import Path
 from typing import Optional, Tuple
 
+from alfresco_backup.restic_installer import install_restic_release
+
 # Allow imports when setup.py is run from the repo root (not installed as a package).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -205,7 +207,6 @@ def check_prerequisites(for_restore=False):
         required_tools = {
             'python3': 'Python 3',
             'pg_dump': 'PostgreSQL client tools (pg_dump)',
-            'restic': 'restic',
             'sudo': 'sudo',
         }
     
@@ -223,7 +224,8 @@ def check_prerequisites(for_restore=False):
         if not for_restore:
             print_info("\nInstall them with:")
             print("  sudo apt-get update")
-            print("  sudo apt-get install -y python3 python3-venv python3-full postgresql-client restic")
+            print("  sudo apt-get install -y postgresql-client")
+            print("\nRestic is installed by the setup wizard if it is missing.")
         else:
             print_info("\nInstall Python 3 with:")
             print("  sudo apt-get update")
@@ -1936,6 +1938,15 @@ def ensure_restic() -> bool:
         if update and install and install.returncode == 0 and shutil.which('restic'):
             print_success("restic installed")
             return True
+        print_warning("restic is not available from this system's apt repositories")
+    if ask_yes_no(
+        "Install the verified official restic binary to /usr/local/bin?", default=True
+    ):
+        installed, message = install_restic_release(use_sudo=not is_running_as_root())
+        if installed:
+            print_success(message)
+            return True
+        print_error(message)
     return False
 
 

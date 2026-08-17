@@ -12,6 +12,7 @@ import yaml
 from .app_config import AppConfig, CONFIG_VERSION, POLICIES_FILENAME
 from .migration import migrate_legacy_env, needs_migration
 from .restic import ResticRepository
+from ..restic_installer import install_restic_release
 
 
 def check_restic_installed() -> bool:
@@ -23,7 +24,10 @@ def install_restic_ubuntu(use_sudo: bool) -> bool:
     for cmd in [prefix + ['apt-get', 'update'], prefix + ['apt-get', 'install', '-y', 'restic']]:
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
-            return False
+            installed, message = install_restic_release(use_sudo)
+            if not installed:
+                print(message)
+            return installed
     return check_restic_installed()
 
 

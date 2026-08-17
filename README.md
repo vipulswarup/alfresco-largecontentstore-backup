@@ -10,9 +10,9 @@ Production-grade backup and restore system for Alfresco deployments, designed to
 
 **Required system packages:**
 ```bash
-# On Debian/Ubuntu:
+# On Ubuntu 18.04 and newer:
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-full postgresql-client restic
+sudo apt-get install -y python3 python3-venv postgresql-client restic
 
 # On RHEL/CentOS:
 sudo yum install python3 python3-pip postgresql rsync rclone
@@ -31,7 +31,14 @@ python3 setup.py
 
 Choose **1. Guided setup**. It automatically creates `venv/`, installs Python dependencies there, checks/installs **restic**, then asks whether you want one backup destination or multiple destinations.
 
-**Note:** If venv creation fails, install: `sudo apt install python3-venv python3-full`
+**Ubuntu 16.04:** Its repositories do not provide `restic` or `python3-full`.
+Install Python 3.8 separately (without replacing the system Python), install
+`postgresql-client`, and run `/opt/python3.8/bin/python3.8 setup.py`. If restic
+is absent, the setup wizard offers to download and checksum-verify the official
+restic binary to `/usr/local/bin/restic`.
+
+**Note:** If venv creation fails, install the venv package matching the Python
+you run, for example `sudo apt install python3-venv` on supported Ubuntu releases.
 
 ### Running Backups
 

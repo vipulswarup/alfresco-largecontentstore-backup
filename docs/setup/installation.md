@@ -4,7 +4,7 @@ This guide walks through every step required to deploy the Alfresco Backup Syste
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.8+
 - PostgreSQL client tools (`pg_dump`, `psql`)
 - `rsync`
 - `gzip` (standard on most Linux systems)
@@ -43,6 +43,15 @@ Use the manual workflow when you prefer explicit control over each step or when 
 sudo apt-get update
 sudo apt-get install -y python3 python3-pip python3-venv postgresql-client rsync gzip
 ```
+
+### Ubuntu 16.04 compatibility
+
+Ubuntu 16.04 does not ship `python3-full` or `restic`. Keep its system Python
+unchanged: install Python 3.8 under `/opt/python3.8`, install
+`postgresql-client rsync gzip` through APT, and run the wizard with
+`/opt/python3.8/bin/python3.8 setup.py`. When the APT install of restic is not
+available, the wizard offers a checksum-verified official restic binary install
+to `/usr/local/bin/restic` on x86_64 systems.
 
 ### 2. Repository & Virtual Environment
 
