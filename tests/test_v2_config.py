@@ -84,6 +84,39 @@ def test_app_config_validation(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cfg = AppConfig(str(env), str(policies))
     assert len(cfg.enabled_policies()) == 1
+    assert cfg.global_config.restic_read_concurrency == 4
+
+
+def test_app_config_rejects_invalid_restic_read_concurrency(tmp_path, monkeypatch):
+    env = tmp_path / '.env'
+    policies = tmp_path / 'backup-policies.yml'
+    (tmp_path / 'alf_data' / 'contentstore').mkdir(parents=True)
+    env.write_text(
+        f"PGHOST=localhost\nPGPORT=5432\nPGUSER=a\nPGPASSWORD=b\n"
+        f"ALF_BASE_DIR={tmp_path}\n"
+    )
+    policies.write_text(yaml.dump({
+        'config_version': 1,
+        'global': {
+            'staging_dir': str(tmp_path / 'staging'),
+            'restic_read_concurrency': 0,
+        },
+        'credential_profiles': [],
+        'backup_policies': [{
+            'name': 'local',
+            'enabled': True,
+            'destination_type': 'filesystem',
+            'repository_path': str(tmp_path / 'repo'),
+            'encryption': {'enabled': False, 'password_env': None},
+            'backup_time': '02:00',
+            'retention_days': 7,
+            'priority': 10,
+        }],
+    }))
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match='restic_read_concurrency'):
+        AppConfig(str(env), str(policies))
 
 
 def test_app_config_rejects_duplicate_enabled_filesystem_repositories(tmp_path, monkeypatch):

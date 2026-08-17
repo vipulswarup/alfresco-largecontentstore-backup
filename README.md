@@ -129,7 +129,7 @@ rm -rf $ALF_BASE_DIR/alf_data/solr4/index
 - **PostgreSQL Backup**: SQL dumps using embedded PostgreSQL binaries (version matching)
 - **Contentstore Backup**: Incremental snapshots using rsync with hardlink optimization
 - **S3 Support**: Direct S3 sync for contentstore, upload for PostgreSQL dumps
-- **Parallel Processing**: Configurable parallelism for large contentstores (5TB+)
+- **Parallel Processing**: Concurrent Restic file reads for each backup destination
 - **Retention Policy**: Automatic cleanup of old backups
 - **Email Alerts**: Configurable success/failure notifications
 
@@ -149,7 +149,10 @@ rm -rf $ALF_BASE_DIR/alf_data/solr4/index
 
 **Contentstore:** Uses `rsync` with `--link-dest` for incremental backups. Only changed files consume additional disk space. For S3 mode, syncs directly from live contentstore to S3 using `rclone`.
 
-**Parallel Execution:** Large contentstores are processed in parallel across top-level directories (typically year-based), significantly reducing backup time.
+**Parallel Execution:** Each Restic backup process reads multiple source files concurrently.
+Set `global.restic_read_concurrency` in `backup-policies.yml` (default: `4`).
+Start at `4`; increase gradually only when the source storage, CPU, and backup
+backend have spare capacity. Set it to `1` for single-file-read behavior.
 
 ### Restore Strategy
 

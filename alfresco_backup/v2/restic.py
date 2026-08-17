@@ -92,6 +92,12 @@ class ResticRepository:
             env['AWS_ACCESS_KEY_ID'] = self.profile.access_key(os.environ)
             env['AWS_SECRET_ACCESS_KEY'] = self.profile.secret_key(os.environ)
             env['AWS_DEFAULT_REGION'] = self.profile.region
+
+        # Restic reads this many source files concurrently during one `backup`
+        # process. It improves throughput for a single multi-terabyte destination
+        # without splitting its data across snapshots or repositories.
+        read_concurrency = self.config.global_config.restic_read_concurrency
+        env['RESTIC_READ_CONCURRENCY'] = str(read_concurrency)
         return env
 
     def _base_cmd(self) -> List[str]:

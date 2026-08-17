@@ -97,10 +97,14 @@ class AppConfig:
         max_parallel = int(data.get('max_parallel_destinations', 2))
         if max_parallel < 1:
             raise ValueError('max_parallel_destinations must be >= 1')
+        read_concurrency = int(data.get('restic_read_concurrency', 4))
+        if not 1 <= read_concurrency <= 32:
+            raise ValueError('restic_read_concurrency must be between 1 and 32')
         dm = data.get('default_maintenance', {})
         self.global_config = GlobalConfig(
             staging_dir=staging,
             max_parallel_destinations=max_parallel,
+            restic_read_concurrency=read_concurrency,
             default_maintenance=MaintenanceConfig(
                 enabled=bool(dm.get('enabled', True)),
                 day_of_week=str(dm.get('day_of_week', 'sunday')).lower(),

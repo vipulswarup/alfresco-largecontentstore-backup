@@ -50,3 +50,26 @@ def test_forget_prune_uses_host_grouping(monkeypatch):
         '--group-by', 'host',
         '--prune',
     ]
+
+
+def test_repository_sets_restic_read_concurrency():
+    policy = BackupPolicy(
+        name='bak1week',
+        enabled=True,
+        destination_type='filesystem',
+        repository_path='/tmp/repo',
+        credential_profile=None,
+        repository_prefix=None,
+        encryption=EncryptionConfig(enabled=True, password_env='RESTIC_PASSWORD_BAK1WEEK'),
+        backup_time='02:00',
+        retention_days=7,
+        maintenance=MaintenanceConfig(enabled=True, day_of_week='sunday', time='03:30'),
+        priority=10,
+    )
+    config = MagicMock()
+    config.global_config.restic_read_concurrency = 8
+    config.get_profile.return_value = None
+
+    repo = ResticRepository(policy, config, profile=None)
+
+    assert repo._env['RESTIC_READ_CONCURRENCY'] == '8'

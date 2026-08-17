@@ -63,6 +63,7 @@ class BackupPolicy:
 class GlobalConfig:
     staging_dir: Path
     max_parallel_destinations: int
+    restic_read_concurrency: int
     default_maintenance: MaintenanceConfig
 
 
