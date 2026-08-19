@@ -1363,7 +1363,11 @@ def configure_cron_job():
                 return False
     
     # Build cron command with date-stamped log file
-    cron_command = f"cd {current_dir} && {venv_python} {backup_script} >> {log_dir}/cron-$(date +\\%Y-\\%m-\\%d).log 2>&1"
+    cron_path = '/usr/local/bin:/usr/bin:/bin'
+    cron_command = (
+        f"PATH={cron_path}; export PATH; cd {current_dir} && {venv_python} "
+        f"{backup_script} >> {log_dir}/cron-$(date +\\%Y-\\%m-\\%d).log 2>&1"
+    )
     cron_entry = f"{cron_time} {cron_command}"
 
     maintenance_config = _load_default_maintenance_config()
@@ -1376,7 +1380,8 @@ def configure_cron_job():
             str(maintenance_config.get('time', '03:30')),
         )
         maintenance_command = (
-            f"cd {current_dir} && {venv_python} {backup_script} "
+            f"PATH={cron_path}; export PATH; cd {current_dir} && "
+            f"{venv_python} {backup_script} "
             f">> {log_dir}/cron-maintenance-$(date +\\%Y-\\%m-\\%d).log 2>&1"
         )
         maintenance_entry = f"{maintenance_cron_time} {maintenance_command}"

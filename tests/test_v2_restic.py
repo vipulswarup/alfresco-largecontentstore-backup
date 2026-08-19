@@ -6,6 +6,7 @@ from alfresco_backup.v2.models import BackupPolicy, EncryptionConfig, Maintenanc
 from alfresco_backup.v2.restic import (
     INSECURE_NO_PASSWORD_MIN_VERSION,
     ResticRepository,
+    restic_binary,
     supports_insecure_no_password_flag,
 )
 
@@ -73,3 +74,13 @@ def test_repository_sets_restic_read_concurrency():
     repo = ResticRepository(policy, config, profile=None)
 
     assert repo._env['RESTIC_READ_CONCURRENCY'] == '8'
+
+
+def test_restic_binary_uses_explicit_path_for_minimal_cron_environment(tmp_path, monkeypatch):
+    binary = tmp_path / 'restic'
+    binary.write_text('#!/bin/sh\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv('RESTIC_BINARY', str(binary))
+    monkeypatch.setattr('alfresco_backup.v2.restic.shutil.which', lambda _name: None)
+
+    assert restic_binary() == str(binary)

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -20,13 +21,30 @@ UNKNOWN_INSECURE_FLAG = re.compile(r'unknown flag: --insecure-no-password', re.I
 
 # --insecure-no-password exists from restic 0.17.0 (Ubuntu apt often ships older).
 INSECURE_NO_PASSWORD_MIN_VERSION = (0, 17, 0)
+DEFAULT_RESTIC_PATHS = ('/usr/local/bin/restic', '/usr/bin/restic')
+
+
+def restic_binary() -> str:
+    """Return an executable restic path that also works in cron's minimal PATH."""
+    configured = os.getenv('RESTIC_BINARY', '').strip()
+    candidates = [configured] if configured else []
+
+    from_path = shutil.which('restic')
+    if from_path:
+        candidates.append(from_path)
+    candidates.extend(DEFAULT_RESTIC_PATHS)
+
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return 'restic'
 
 
 @lru_cache(maxsize=1)
 def get_restic_version() -> Optional[Tuple[int, int, int]]:
     try:
         proc = subprocess.run(
-            ['restic', 'version'],
+            [restic_binary(), 'version'],
             capture_output=True,
             text=True,
             timeout=30,
@@ -101,7 +119,7 @@ class ResticRepository:
         return env
 
     def _base_cmd(self) -> List[str]:
-        return ['restic', '-r', self.repository]
+        return [restic_binary(), '-r', self.repository]
 
     def _extra_password_flags(self, args: List[str]) -> List[str]:
         """Flags for repositories without restic encryption/password."""
