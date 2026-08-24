@@ -1,17 +1,19 @@
 """On-demand full vs incremental backup size report."""
 
+import json
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from .app_config import AppConfig
 from .email_report import _format_size
+from .models import BackupPolicy
 from .restic import ResticRepository
 
 SIZE_TAG_PROCESSED = 'bytes-processed:'
 SIZE_TAG_ADDED = 'bytes-added:'
 SIZE_TAG_SOLR = 'solr-bytes:'
-KIND_COMPLETE = 'kind:complete-set'
+SIZE_TAG_DB = 'bytes-db:'
 KIND_SOLR = 'kind:solr-indexes'
 
 
@@ -62,13 +64,18 @@ def generate_size_report(config: AppConfig) -> str:
             lines.append("")
             continue
 
-        lines.extend(_policy_summary_lines(repo, snapshots))
+        lines.extend(_policy_summary_lines(repo, snapshots, config, policy))
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _policy_summary_lines(repo: ResticRepository, snapshots: List[Dict[str, Any]]) -> List[str]:
+def _policy_summary_lines(
+    repo: ResticRepository,
+    snapshots: List[Dict[str, Any]],
+    config: AppConfig,
+    policy: BackupPolicy,
+) -> List[str]:
     records = []
     for snap in snapshots:
         tags = snap.get('tags') or []
@@ -81,6 +88,7 @@ def _policy_summary_lines(repo: ResticRepository, snapshots: List[Dict[str, Any]
             'kind': 'solr' if KIND_SOLR in tags else 'contentstore',
             'processed': processed,
             'added': added,
+            'db': _db_size(repo, config, policy, snap, tags),
         })
 
     contentstore = sorted(
@@ -101,16 +109,24 @@ def _policy_summary_lines(repo: ResticRepository, snapshots: List[Dict[str, Any]
     lines = ["", "Last full backup"]
     lines.append(f"  Date: {_format_datetime(full_date) if full_date else 'n/a'}")
     if contentstore:
-        lines.append(f"  Contentstore: {_full_size_text(contentstore[0])}")
+        lines.append(f"  Contentstore: {_contentstore_full_size(contentstore[0])}")
     else:
         lines.append("  Contentstore: n/a")
+    lines.append(
+        f"  Database: {_format_optional_size(contentstore[0]['db'] if contentstore else None)}"
+    )
     if solr:
         lines.append(f"  Solr indexes: {_full_size_text(solr[0])}")
 
-    incrementals_by_date = defaultdict(lambda: {'contentstore': [], 'solr': []})
+    incrementals_by_date = defaultdict(
+        lambda: {'contentstore': [], 'database': [], 'solr': []}
+    )
     for kind, items in (('contentstore', contentstore), ('solr', solr)):
         for item in items[1:]:
-            incrementals_by_date[_format_date(item['when'])][kind].append(item['added'])
+            day = _format_date(item['when'])
+            incrementals_by_date[day][kind].append(item['added'])
+            if kind == 'contentstore':
+                incrementals_by_date[day]['database'].append(item['db'])
 
     lines.append("")
     lines.append("Incremental backups")
@@ -121,7 +137,11 @@ def _policy_summary_lines(repo: ResticRepository, snapshots: List[Dict[str, Any]
     for day in sorted(incrementals_by_date.keys(), reverse=True):
         lines.append(f"  {day}")
         amounts = incrementals_by_date[day]
-        for key, label in (('contentstore', 'Contentstore'), ('solr', 'Solr indexes')):
+        for key, label in (
+            ('contentstore', 'Contentstore'),
+            ('database', 'Database'),
+            ('solr', 'Solr indexes'),
+        ):
             values = amounts[key]
             if not values:
                 continue
@@ -137,6 +157,54 @@ def _full_size_text(record: Dict[str, Any]) -> str:
     if size is None:
         size = record['added']
     return _format_optional_size(size)
+
+
+def _contentstore_full_size(record: Dict[str, Any]) -> str:
+    size = record['processed']
+    if size is not None and record.get('db') is not None:
+        size = max(size - record['db'], 0)
+    elif size is None:
+        size = record['added']
+    return _format_optional_size(size)
+
+
+def _db_size(
+    repo: ResticRepository,
+    config: AppConfig,
+    policy: BackupPolicy,
+    snap: Dict[str, Any],
+    tags: List[str],
+) -> Optional[int]:
+    if KIND_SOLR in tags:
+        return None
+    tagged = parse_size_tag(tags, SIZE_TAG_DB)
+    if tagged is not None:
+        return tagged
+    run_id = _tag_value(tags, 'run:')
+    if not run_id:
+        return None
+    staging = getattr(getattr(config, 'global_config', None), 'staging_dir', None)
+    if staging is None:
+        return None
+    path = str(staging / run_id / policy.name / 'metadata' / 'run.json')
+    snap_id = snap.get('id') or snap.get('short_id') or ''
+    if not snap_id:
+        return None
+    dumped = repo.dump_text(snap_id, path)
+    if not dumped.get('success'):
+        return None
+    try:
+        doc = json.loads(dumped.get('stdout') or '')
+        return int((doc.get('pg_dump') or {}).get('size_bytes'))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _tag_value(tags: List[str], prefix: str) -> Optional[str]:
+    for tag in tags:
+        if tag.startswith(prefix):
+            return tag[len(prefix):]
+    return None
 
 
 def _sum_optional(left: Optional[int], right: Optional[int]) -> Optional[int]:

@@ -10,7 +10,7 @@ from .app_config import AppConfig
 from .metadata import write_run_metadata
 from .models import BackupPolicy, DestinationResult, PgDumpInfo, RunContext
 from .restic import ResticRepository
-from .size_report import KIND_SOLR, SIZE_TAG_ADDED, SIZE_TAG_PROCESSED
+from .size_report import KIND_SOLR, SIZE_TAG_ADDED, SIZE_TAG_DB, SIZE_TAG_PROCESSED
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,10 @@ class DestinationBackupTask:
             result.bytes_processed = int(br.get('bytes_processed', 0) or 0)
             result.bytes_added = int(br.get('bytes_added', 0) or 0)
             self._record_size_tags(
-                result.snapshot_id, result.bytes_processed, result.bytes_added
+                result.snapshot_id,
+                result.bytes_processed,
+                result.bytes_added,
+                pg_dump.size_bytes,
             )
 
             solr_paths = self.config.solr_index_paths
@@ -114,14 +117,18 @@ class DestinationBackupTask:
         return result
 
     def _record_size_tags(
-        self, snapshot_id: Optional[str], processed: int, added: int
+        self,
+        snapshot_id: Optional[str],
+        processed: int,
+        added: int,
+        db_bytes: Optional[int] = None,
     ) -> None:
         if not snapshot_id:
             return
-        tagged = self.repo.add_tags(
-            snapshot_id,
-            [f'{SIZE_TAG_PROCESSED}{processed}', f'{SIZE_TAG_ADDED}{added}'],
-        )
+        tags = [f'{SIZE_TAG_PROCESSED}{processed}', f'{SIZE_TAG_ADDED}{added}']
+        if db_bytes is not None:
+            tags.append(f'{SIZE_TAG_DB}{db_bytes}')
+        tagged = self.repo.add_tags(snapshot_id, tags)
         if not tagged.get('success'):
             logger.warning(
                 "Could not record size tags on snapshot %s: %s",

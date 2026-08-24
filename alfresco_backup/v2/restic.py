@@ -276,6 +276,9 @@ class ResticRepository:
         args.append(snapshot_id)
         return self._run(args, timeout=600)
 
+    def dump_text(self, snapshot_id: str, path: str) -> Dict[str, Any]:
+        return self._run(['dump', snapshot_id, path], timeout=120)
+
     def stats_json(self, snapshot_id: str) -> Dict[str, Any]:
         r = self._run(
             ['stats', '--json', '--mode', 'restore-size', snapshot_id],

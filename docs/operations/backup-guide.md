@@ -59,8 +59,8 @@ After a backup has run, generate the size report from `python3 setup.py` menu op
 
 The report shows, per destination:
 
-- **Last full backup**: date of the first retained snapshot, with contentstore and Solr sizes in GB and MB
-- **Incremental backups**: later backup dates with new data added that day, in GB and MB
+- **Last full backup**: date of the first retained snapshot, with contentstore, database, and Solr sizes in GB and MB
+- **Incremental backups**: later backup dates with new data added that day, in GB and MB, including the database dump size for that run
 
 Setup will offer to email the report and collect recipient addresses one at a time. SMTP settings from Guided setup (`.env`) are required to send.
 

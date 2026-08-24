@@ -49,7 +49,7 @@ venv/bin/python backup.py
 
 **Backup size report (on demand):** `python3 setup.py` -> menu **6. Backup size report**
 
-Shows the last full backup (date, MB/GB) and a date-wise incremental breakdown. You can email the report by entering recipient addresses one at a time.
+Shows the last full backup (date, MB/GB for contentstore, database, and Solr) and a date-wise incremental breakdown. You can email the report by entering recipient addresses one at a time.
 
 CLI equivalent:
 ```bash
