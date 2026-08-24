@@ -125,13 +125,13 @@ def _add_filesystem_destination(policies_path: Path, name: str = None) -> None:
     doc = _load_policies(policies_path)
     if not name:
         name = input("Policy name: ").strip()
-    repo_path = input("Repository path: ").strip()
+    repo_path = input("Backup location path: ").strip()
     existing = _find_existing_filesystem_policy(doc, name, repo_path)
     if existing:
         reason = (
             "same policy name"
             if existing.get('name') == name
-            else f"same repository path ({repo_path})"
+            else f"same backup location path ({repo_path})"
         )
         print(f"Destination already exists ({reason}): {existing.get('name')}")
         if input("Update this existing destination instead of adding a duplicate? [Y/n]: ").strip().lower() in ('n', 'no'):

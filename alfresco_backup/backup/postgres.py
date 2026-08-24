@@ -49,18 +49,37 @@ def backup_postgres(config):
         return result
     
     import logging
+    from alfresco_backup.utils.pg_client import (
+        missing_client_error,
+        select_postgres_clients,
+    )
+
     logger = logging.getLogger(__name__)
-    
-    # Use embedded PostgreSQL tools to avoid version mismatch
-    # Alfresco has its own PostgreSQL 9.4 binaries that match the server version
-    embedded_pg_dump = config.alf_base_dir / 'postgresql' / 'bin' / 'pg_dump'
-    
-    if embedded_pg_dump.exists():
-        pg_dump_cmd = str(embedded_pg_dump)
-        logger.info(f"Using embedded pg_dump: {pg_dump_cmd}")
+
+    compatible, found, server = select_postgres_clients(
+        'pg_dump',
+        extra_paths=[config.alf_base_dir / 'postgresql' / 'bin' / 'pg_dump'],
+        host=config.pghost,
+        port=str(config.pgport),
+        user=config.pguser,
+        password=config.pgpassword,
+        database=config.pgdatabase,
+    )
+    if not compatible:
+        result['error'] = missing_client_error('pg_dump', server, found)
+        result['duration'] = (datetime.now() - start_time).total_seconds()
+        return result
+
+    pg_dump_cmd = compatible[0].path
+    if server:
+        logger.info(
+            f"Using pg_dump {pg_dump_cmd} ({compatible[0].version[0]}.{compatible[0].version[1]}) "
+            f"for server {server[0]}.{server[1]}"
+        )
     else:
-        pg_dump_cmd = 'pg_dump'
-        logger.info(f"Embedded pg_dump not found, using system version: {pg_dump_cmd}")
+        logger.info(
+            f"Using pg_dump {pg_dump_cmd} ({compatible[0].version[0]}.{compatible[0].version[1]})"
+        )
     
     # Set PGPASSWORD for pg_dump
     env = {

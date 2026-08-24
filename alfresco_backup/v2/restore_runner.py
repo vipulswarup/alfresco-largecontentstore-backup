@@ -33,6 +33,7 @@ from alfresco_backup.restore.restore_ux import (
     print_restore_summary,
     save_restore_session,
 )
+from alfresco_backup.utils.pg_client import missing_client_error, select_postgres_clients
 
 logger = logging.getLogger(__name__)
 
@@ -371,10 +372,21 @@ def _restore_snapshot(config: AppConfig, source: RestorableSet, staging: Path) -
 
 def _restore_postgres(config: AppConfig, pg_gz: Path) -> bool:
     env = {'PGPASSWORD': config.pgpassword, 'PATH': os.environ.get('PATH', '')}
-    psql = 'psql'
-    embedded = config.restore_alf_base_dir / 'postgresql' / 'bin' / 'psql'
-    if embedded.exists():
-        psql = str(embedded)
+    extra = [config.restore_alf_base_dir / 'postgresql' / 'bin' / 'psql']
+    compatible, found, server = select_postgres_clients(
+        'psql',
+        extra_paths=extra,
+        host=config.pghost,
+        port=config.pgport,
+        user=config.pguser,
+        password=config.pgpassword,
+        database=config.pgdatabase,
+    )
+    if not compatible:
+        logger.error(missing_client_error('psql', server, found))
+        return False
+    psql = compatible[0].path
+    logger.info("Using psql %s (%s.%s)", psql, compatible[0].version[0], compatible[0].version[1])
 
     try:
         with gzip.open(pg_gz, 'rb') as f_in:

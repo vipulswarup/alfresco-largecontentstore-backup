@@ -1150,6 +1150,77 @@ def configure_postgresql():
 
     return True
 
+
+def _python_venv_apt_package() -> str:
+    return f"python{sys.version_info.major}.{sys.version_info.minor}-venv"
+
+
+def _ensurepip_available() -> bool:
+    try:
+        result = subprocess.run(
+            [sys.executable, '-c', 'import ensurepip'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0
+    except OSError:
+        return False
+
+
+def _remove_incomplete_venv(venv_path: Path) -> None:
+    if venv_path.exists():
+        shutil.rmtree(venv_path, ignore_errors=True)
+
+
+def _install_python_venv_package() -> bool:
+    pkg = _python_venv_apt_package()
+    apt = 'apt-get' if shutil.which('apt-get') else ('apt' if shutil.which('apt') else None)
+    if not apt:
+        print_error("Could not detect apt")
+        print_info(f"Install {pkg} manually, then rerun setup:")
+        print_info(f"  sudo apt install {pkg}")
+        return False
+
+    if is_running_as_root():
+        if not ask_yes_no(f"Install {pkg} now?", default=True):
+            print_info(f"Install it manually, then rerun setup: sudo apt install {pkg}")
+            return False
+        prefix = []
+    else:
+        print_warning(f"{pkg} is required to create the virtual environment")
+        if not ask_yes_no(f"Install {pkg} with sudo now?", default=True):
+            print_info(f"Install it manually, then rerun setup: sudo apt install {pkg}")
+            return False
+        prefix = ['sudo']
+
+    print_info(f"Installing {pkg}...")
+    update = run_command(prefix + [apt, 'update'], check=False)
+    if not update or update.returncode != 0:
+        print_warning("apt update failed; attempting install anyway")
+    install = run_command(prefix + [apt, 'install', '-y', pkg], check=False)
+    if not install or install.returncode != 0:
+        print_error(f"Failed to install {pkg}")
+        print_info(f"Install it manually, then rerun setup: sudo apt install {pkg}")
+        return False
+    if not _ensurepip_available():
+        print_error(f"{pkg} is installed but ensurepip is still unavailable")
+        return False
+    print_success(f"{pkg} installed")
+    return True
+
+
+def _create_venv_dir(real_user: str, running_as_root: bool) -> Optional[subprocess.CompletedProcess]:
+    if running_as_root:
+        print_info(f"Running as user {real_user} (not root)")
+        return run_command(
+            ['sudo', '-u', real_user, sys.executable, '-m', 'venv', 'venv'],
+            capture_output=True,
+            check=False,
+        )
+    return run_command([sys.executable, '-m', 'venv', 'venv'], capture_output=True, check=False)
+
+
 def create_virtual_environment():
     """Create Python virtual environment and install dependencies."""
     print_header("Step 4: Create Virtual Environment")
@@ -1163,70 +1234,48 @@ def create_virtual_environment():
     print_info(f"Virtual environment will be owned by: {real_user}")
     
     if venv_path.exists():
-        print_warning(f"Virtual environment already exists at: {venv_path}")
-        if not ask_yes_no("Recreate it?", default=False):
-            print_info("Skipping virtual environment creation")
-            return True
-        print_info("Removing existing virtual environment...")
-        shutil.rmtree(venv_path)
+        pip_ok = (venv_path / 'bin' / 'pip').exists()
+        if not pip_ok:
+            print_warning("Existing virtual environment is incomplete (missing pip); recreating it.")
+            shutil.rmtree(venv_path)
+        else:
+            print_warning(f"Virtual environment already exists at: {venv_path}")
+            if not ask_yes_no("Recreate it?", default=False):
+                print_info("Skipping virtual environment creation")
+                return True
+            print_info("Removing existing virtual environment...")
+            shutil.rmtree(venv_path)
     
     if not ask_yes_no("\nCreate virtual environment and install dependencies?"):
         print_warning("Skipping virtual environment creation")
         return False
     
     try:
-        # Check if venv module is available
-        print_info("\nChecking if venv module is available...")
-        check_result = run_command([sys.executable, '-m', 'venv', '--help'], capture_output=True, check=False)
-        if check_result is None or check_result.returncode != 0:
-            print_error("Python venv module is not available")
-            print_info("\nOn Debian/Ubuntu systems, install python3-venv package:")
-            print_info("  sudo apt install python3-venv")
-            print_info("\nOr for specific Python version:")
-            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-            print_info(f"  sudo apt install python{python_version}-venv")
-            
-            if running_as_root:
-                if ask_yes_no("\nWould you like to install python3-venv now?", default=True):
-                    # Detect package manager and install
-                    if shutil.which('apt'):
-                        install_cmd = ['apt', 'install', '-y', f'python{python_version}-venv']
-                        print_info(f"Installing python{python_version}-venv...")
-                        install_result = run_command(install_cmd, check=False)
-                        if install_result and install_result.returncode == 0:
-                            print_success("python3-venv installed successfully")
-                        else:
-                            print_error("Failed to install python3-venv")
-                            print_info("Please install it manually and run setup again")
-                            return False
-                    else:
-                        print_error("Could not detect package manager (apt not found)")
-                        print_info("Please install python3-venv manually")
-                        return False
-                else:
-                    print_info("Please install python3-venv and run setup again")
-                    return False
-            else:
-                print_info("\nPlease install python3-venv and run setup again:")
-                print_info("  sudo apt install python3-venv")
+        if not _ensurepip_available():
+            print_error("Python cannot create virtual environments because ensurepip is not available.")
+            print_info("On Debian/Ubuntu, install the matching venv package:")
+            print_info(f"  sudo apt install {_python_venv_apt_package()}")
+            if not _install_python_venv_package():
                 return False
-        
-        # Create venv
+
         print_info("\nCreating virtual environment...")
-        
-        if running_as_root:
-            # Run as the real user using sudo -u
-            print_info(f"Running as user {real_user} (not root)")
-            result = run_command(['sudo', '-u', real_user, sys.executable, '-m', 'venv', 'venv'], check=True)
-        else:
-            result = run_command([sys.executable, '-m', 'venv', 'venv'], check=True)
-        
-        if result is None:
-            print_error("Failed to create virtual environment")
-            if result and result.stderr and 'ensurepip is not available' in result.stderr:
-                print_info("\nThis usually means python3-venv package is not installed.")
-                print_info("Install it with: sudo apt install python3-venv")
-            return False
+        result = _create_venv_dir(real_user, running_as_root)
+        if result is None or result.returncode != 0:
+            _remove_incomplete_venv(venv_path)
+            combined = ''
+            if result is not None:
+                combined = f"{result.stdout or ''}{result.stderr or ''}"
+            if 'ensurepip' in combined.lower():
+                print_info("ensurepip is missing; the python3-venv package is required.")
+                if _install_python_venv_package():
+                    print_info("\nRetrying virtual environment creation...")
+                    result = _create_venv_dir(real_user, running_as_root)
+            if result is None or result.returncode != 0:
+                print_error("Failed to create virtual environment")
+                _remove_incomplete_venv(venv_path)
+                print_info(f"Install the venv package, then rerun setup:")
+                print_info(f"  sudo apt install {_python_venv_apt_package()}")
+                return False
         
         print_success("Virtual environment created")
         
