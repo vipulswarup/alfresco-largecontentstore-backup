@@ -124,3 +124,37 @@ def send_run_report(config: AppConfig, run_result: RunResult) -> None:
         logger.info("V2 run report email sent")
     except Exception as e:
         logger.error(f"Failed to send v2 email: {e}")
+
+
+def smtp_is_configured(config: AppConfig) -> bool:
+    return bool(
+        config.smtp_host
+        and config.smtp_port
+        and config.smtp_user
+        and config.smtp_password
+        and config.alert_from
+    )
+
+
+def send_plain_email(
+    config: AppConfig,
+    subject: str,
+    body: str,
+    recipients: List[str],
+) -> None:
+    if not recipients:
+        raise ValueError('No email recipients')
+    if not smtp_is_configured(config):
+        raise ValueError('SMTP is not configured in .env')
+
+    msg = MIMEMultipart()
+    msg['From'] = config.alert_from
+    msg['To'] = ', '.join(recipients)
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
+        server.starttls()
+        server.login(config.smtp_user, config.smtp_password)
+        server.send_message(msg)
+    logger.info("Email sent to %s", ', '.join(recipients))

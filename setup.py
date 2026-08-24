@@ -2188,6 +2188,76 @@ def run_backup_now() -> None:
             print_info(f"Log file: {latest[-1]}")
 
 
+def _collect_report_recipients() -> list:
+    print_info("Enter recipient email addresses one at a time. Leave blank when done.")
+    recipients = []
+    while True:
+        address = input(f"{Colors.OKCYAN}Email address: {Colors.ENDC}").strip()
+        if not address:
+            break
+        if '@' not in address or '.' not in address.rsplit('@', 1)[-1]:
+            print_warning("That does not look like an email address.")
+            continue
+        if address not in recipients:
+            recipients.append(address)
+        print_info(f"Added {address} ({len(recipients)} recipient(s))")
+    return recipients
+
+
+def run_backup_size_report() -> None:
+    print_header("Backup Size Report")
+    if not python_dependencies_available() and not install_python_dependencies():
+        return
+
+    env_path = Path('.env')
+    from alfresco_backup.v2.app_config import POLICIES_FILENAME
+    policies_path = Path(POLICIES_FILENAME)
+    if not env_path.exists() or not policies_path.exists():
+        print_error("Run Guided setup first (.env and backup-policies.yml are required).")
+        return
+
+    from alfresco_backup.v2.setup_wizard import _ensure_policy_passwords
+    _ensure_policy_passwords(env_path, policies_path)
+    try:
+        from alfresco_backup.v2.app_config import AppConfig
+        config = AppConfig(str(env_path), str(policies_path))
+    except Exception as exc:
+        print_error(str(exc))
+        return
+
+    print_info("Querying restic snapshots...")
+    from alfresco_backup.v2.size_report import generate_size_report
+    report = generate_size_report(config)
+    print()
+    print(report)
+
+    if not ask_yes_no("Email this report?", default=False):
+        return
+
+    from alfresco_backup.v2.email_report import send_plain_email, smtp_is_configured
+    if not smtp_is_configured(config):
+        print_error("SMTP is not configured in .env. Configure email alerts in Guided setup first.")
+        return
+
+    recipients = _collect_report_recipients()
+    if not recipients:
+        print_info("No email addresses entered; skipping send.")
+        return
+
+    from datetime import datetime
+    customer = config.customer_name
+    prefix = "EisenVault Backup Size Report"
+    if customer:
+        subject = f"{prefix} - {customer} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    else:
+        subject = f"{prefix} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    try:
+        send_plain_email(config, subject, report, recipients)
+        print_success(f"Report emailed to: {', '.join(recipients)}")
+    except Exception as exc:
+        print_error(f"Failed to send email: {exc}")
+
+
 def run_main_menu() -> None:
     print_header("Alfresco Backup Setup")
     real_user, _, _ = get_real_user()
@@ -2202,6 +2272,7 @@ def run_main_menu() -> None:
         print("  3. Run backup now")
         print("  4. Restore-only setup")
         print("  5. Verify installation")
+        print("  6. Backup size report")
         print("  0. Exit")
         choice = input(f"{Colors.OKCYAN}Choice: {Colors.ENDC}").strip()
 
@@ -2221,6 +2292,8 @@ def run_main_menu() -> None:
             setup_restore_only()
         elif choice == '5':
             verify_installation()
+        elif choice == '6':
+            run_backup_size_report()
         else:
             print_warning("Invalid choice")
 

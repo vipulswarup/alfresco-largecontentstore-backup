@@ -1,5 +1,6 @@
 """On-demand full vs incremental backup size report."""
 
+from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,10 +30,8 @@ def generate_size_report(config: AppConfig) -> str:
         "Backup size report",
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
-        "Full size is the source scanned for that snapshot.",
-        "Incremental is new data added to the repository in that run.",
-        "Contentstore and Solr indexes are listed separately when both were backed up.",
-        "Older snapshots without recorded incremental size show n/a.",
+        "Full backup is the first snapshot retained for each destination.",
+        "Incremental sizes are new data added on later backup dates.",
         "",
     ]
     policies = config.enabled_policies()
@@ -58,47 +57,94 @@ def generate_size_report(config: AppConfig) -> str:
             continue
 
         snapshots = listed.get('snapshots') or []
-        snapshots = [
-            snap for snap in snapshots
-            if KIND_COMPLETE in (snap.get('tags') or [])
-            or KIND_SOLR in (snap.get('tags') or [])
-        ]
         if not snapshots:
             lines.append("  No snapshots found.")
             lines.append("")
             continue
 
-        snapshots = sorted(snapshots, key=_snapshot_sort_key, reverse=True)
-        for snap in snapshots:
-            lines.extend(_snapshot_lines(repo, snap))
+        lines.extend(_policy_summary_lines(repo, snapshots))
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _snapshot_lines(repo: ResticRepository, snap: Dict[str, Any]) -> List[str]:
-    tags = snap.get('tags') or []
-    snap_id = snap.get('short_id') or snap.get('id') or ''
-    full_id = snap.get('id') or snap_id
-    processed, added, solr_bytes = _snapshot_sizes(repo, tags, full_id)
-    run_id = _tag_value(tags, 'run:')
+def _policy_summary_lines(repo: ResticRepository, snapshots: List[Dict[str, Any]]) -> List[str]:
+    records = []
+    for snap in snapshots:
+        tags = snap.get('tags') or []
+        snap_id = snap.get('id') or snap.get('short_id') or ''
+        processed, added, solr_bytes = _snapshot_sizes(repo, tags, snap_id)
+        if processed is None and solr_bytes is not None and KIND_SOLR not in tags:
+            processed = solr_bytes
+        records.append({
+            'when': _parse_snap_datetime(snap),
+            'kind': 'solr' if KIND_SOLR in tags else 'contentstore',
+            'processed': processed,
+            'added': added,
+        })
 
-    lines = [
-        f"  Snapshot: {snap_id}",
-        f"  Time: {_format_snap_time(snap)}",
-    ]
-    if run_id:
-        lines.append(f"  Run: {run_id}")
-    if KIND_SOLR in tags:
-        lines.append("  Component: Solr indexes")
+    contentstore = sorted(
+        [r for r in records if r['kind'] == 'contentstore'],
+        key=lambda r: r['when'],
+    )
+    solr = sorted(
+        [r for r in records if r['kind'] == 'solr'],
+        key=lambda r: r['when'],
+    )
+
+    full_date = None
+    if contentstore:
+        full_date = contentstore[0]['when']
+    elif solr:
+        full_date = solr[0]['when']
+
+    lines = ["", "Last full backup"]
+    lines.append(f"  Date: {_format_datetime(full_date) if full_date else 'n/a'}")
+    if contentstore:
+        lines.append(f"  Contentstore: {_full_size_text(contentstore[0])}")
     else:
-        lines.append("  Component: Contentstore")
-    lines.append(f"  Processed: {_format_optional_size(processed)}")
-    lines.append(f"  Backed up this run: {_format_optional_size(added)}")
-    if solr_bytes is not None and KIND_SOLR not in tags:
-        lines.append(f"  Solr indexes (legacy): {_format_optional_size(solr_bytes)}")
+        lines.append("  Contentstore: n/a")
+    if solr:
+        lines.append(f"  Solr indexes: {_full_size_text(solr[0])}")
+
+    incrementals_by_date = defaultdict(lambda: {'contentstore': [], 'solr': []})
+    for kind, items in (('contentstore', contentstore), ('solr', solr)):
+        for item in items[1:]:
+            incrementals_by_date[_format_date(item['when'])][kind].append(item['added'])
+
     lines.append("")
+    lines.append("Incremental backups")
+    if not incrementals_by_date:
+        lines.append("  None yet.")
+        return lines
+
+    for day in sorted(incrementals_by_date.keys(), reverse=True):
+        lines.append(f"  {day}")
+        amounts = incrementals_by_date[day]
+        for key, label in (('contentstore', 'Contentstore'), ('solr', 'Solr indexes')):
+            values = amounts[key]
+            if not values:
+                continue
+            total = None
+            for value in values:
+                total = _sum_optional(total, value)
+            lines.append(f"    {label}: {_format_optional_size(total)}")
     return lines
+
+
+def _full_size_text(record: Dict[str, Any]) -> str:
+    size = record['processed']
+    if size is None:
+        size = record['added']
+    return _format_optional_size(size)
+
+
+def _sum_optional(left: Optional[int], right: Optional[int]) -> Optional[int]:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left + right
 
 
 def _snapshot_sizes(
@@ -122,23 +168,19 @@ def _format_optional_size(size_bytes: Optional[int]) -> str:
     return _format_size(size_bytes)
 
 
-def _tag_value(tags: List[str], prefix: str) -> Optional[str]:
-    for tag in tags:
-        if tag.startswith(prefix):
-            return tag[len(prefix):]
-    return None
-
-
-def _snapshot_sort_key(snap: Dict[str, Any]):
-    return snap.get('time') or ''
-
-
-def _format_snap_time(snap: Dict[str, Any]) -> str:
+def _parse_snap_datetime(snap: Dict[str, Any]) -> datetime:
     raw = snap.get('time')
-    if not isinstance(raw, str):
-        return ''
-    try:
-        parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
-        return parsed.strftime('%Y-%m-%d %H:%M:%S')
-    except ValueError:
-        return raw
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        except ValueError:
+            pass
+    return datetime.now()
+
+
+def _format_datetime(value: datetime) -> str:
+    return value.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _format_date(value: datetime) -> str:
+    return value.strftime('%Y-%m-%d')

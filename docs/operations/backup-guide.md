@@ -55,20 +55,23 @@ sudo chmod 755 /var/log/alfresco-backup
 
 ## Backup Size Report (On Demand)
 
-After a backup has run, generate a full vs incremental size report from the restic snapshots:
+After a backup has run, generate the size report from `python3 setup.py` menu option **6. Backup size report**.
+
+The report shows, per destination:
+
+- **Last full backup**: date of the first retained snapshot, with contentstore and Solr sizes in GB and MB
+- **Incremental backups**: later backup dates with new data added that day, in GB and MB
+
+Setup will offer to email the report and collect recipient addresses one at a time. SMTP settings from Guided setup (`.env`) are required to send.
+
+CLI equivalent:
 
 ```bash
 cd /opt/alfresco-largecontentstore-backup
 venv/bin/python backup.py --size-report
 ```
 
-The report lists each destination snapshot with:
-
-- **Full size**: source scanned for that snapshot (contentstore, PostgreSQL dump, Solr indexes)
-- **Incremental**: new data added to the repository in that run
-- **Solr indexes**: source size of Solr trees included in the snapshot, when recorded
-
-Snapshots created before this feature was added show incremental as `n/a` and full size from `restic stats`.
+Snapshots created before size tags were recorded show full size from `restic stats` and incremental as `n/a`.
 
 ## Logs and Monitoring
 
