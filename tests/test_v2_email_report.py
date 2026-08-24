@@ -32,9 +32,13 @@ def test_destination_lines_include_processed_added_and_solr():
         duration_seconds=12.3,
         bytes_processed=6_089_879_887,
         bytes_added=524_288_000,
-        solr_bytes=10_737_418_240,
+        solr_bytes_processed=10_737_418_240,
+        solr_bytes_added=104_857_600,
     )
     lines = _destination_lines(dest)
-    assert '  Processed (source size): 5.67 GB (5807.76 MB)' in lines
-    assert '  Backed up this run: 500.00 MB' in lines
-    assert '  Solr indexes: 10.00 GB (10240.00 MB)' in lines
+    assert '  Contentstore' in lines
+    assert '    Processed: 5.67 GB (5807.76 MB)' in lines
+    assert '    Backed up this run: 500.00 MB' in lines
+    assert '  Solr indexes' in lines
+    assert '    Processed: 10.00 GB (10240.00 MB)' in lines
+    assert '    Backed up this run: 100.00 MB' in lines

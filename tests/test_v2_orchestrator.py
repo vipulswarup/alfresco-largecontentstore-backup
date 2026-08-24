@@ -127,11 +127,18 @@ def test_destination_backup_includes_solr_and_records_added_bytes(tmp_path, monk
         contentstore_path=contentstore,
     )
     task = DestinationBackupTask(config, policy, ctx)
-    captured = {}
+    captured = {'calls': []}
 
     def fake_backup(paths, tags):
-        captured['paths'] = paths
-        captured['tags'] = tags
+        captured['calls'].append((list(paths), list(tags)))
+        if 'kind:solr-indexes' in tags:
+            return {
+                'success': True,
+                'snapshot_id': 'solr1',
+                'bytes_processed': 100,
+                'bytes_added': 40,
+                'lock_contention': False,
+            }
         return {
             'success': True,
             'snapshot_id': 'snap1',
@@ -164,6 +171,9 @@ def test_destination_backup_includes_solr_and_records_added_bytes(tmp_path, monk
 
     assert result.success
     assert result.bytes_added == 200
-    assert result.solr_bytes >= 100
-    assert solr in captured['paths']
-    assert any(tag.startswith('solr-bytes:') for tag in captured['tags'])
+    assert result.bytes_processed == 1000
+    assert result.solr_bytes_processed == 100
+    assert result.solr_bytes_added == 40
+    assert solr not in captured['calls'][0][0]
+    assert captured['calls'][1][0] == [solr]
+    assert 'kind:solr-indexes' in captured['calls'][1][1]

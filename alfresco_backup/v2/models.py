@@ -101,7 +101,8 @@ class DestinationResult:
     duration_seconds: float = 0.0
     bytes_processed: int = 0
     bytes_added: int = 0
-    solr_bytes: int = 0
+    solr_bytes_processed: int = 0
+    solr_bytes_added: int = 0
     error: Optional[str] = None
     lock_contention: bool = False
 

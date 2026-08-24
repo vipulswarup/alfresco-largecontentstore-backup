@@ -39,12 +39,18 @@ def _destination_lines(dest: DestinationResult) -> List[str]:
         lines.append(f"  Snapshot: {dest.snapshot_id}")
     if dest.duration_seconds:
         lines.append(f"  Duration: {dest.duration_seconds:.1f}s")
-    if dest.bytes_processed:
-        lines.append(f"  Processed (source size): {_format_size(dest.bytes_processed)}")
-    if dest.success or dest.bytes_added:
-        lines.append(f"  Backed up this run: {_format_size(dest.bytes_added)}")
-    if dest.solr_bytes:
-        lines.append(f"  Solr indexes: {_format_size(dest.solr_bytes)}")
+    if dest.success or dest.bytes_processed or dest.bytes_added:
+        lines.extend([
+            "  Contentstore",
+            f"    Processed: {_format_size(dest.bytes_processed)}",
+            f"    Backed up this run: {_format_size(dest.bytes_added)}",
+        ])
+    if dest.solr_bytes_processed or dest.solr_bytes_added:
+        lines.extend([
+            "  Solr indexes",
+            f"    Processed: {_format_size(dest.solr_bytes_processed)}",
+            f"    Backed up this run: {_format_size(dest.solr_bytes_added)}",
+        ])
     if dest.lock_contention:
         lines.append("  Lock contention: yes")
     if dest.error:

@@ -56,9 +56,10 @@ def test_generate_size_report_uses_snapshot_tags(monkeypatch):
     assert 'Policy: local (filesystem)' in report
     assert 'Snapshot: abc123de' in report
     assert 'Run: 20260824-0200-aaaa' in report
-    assert 'Full size: 5.67 GB (5807.76 MB)' in report
-    assert 'Incremental: 500.00 MB' in report
-    assert 'Solr indexes: 10.00 GB (10240.00 MB)' in report
+    assert 'Component: Contentstore' in report
+    assert 'Processed: 5.67 GB (5807.76 MB)' in report
+    assert 'Backed up this run: 500.00 MB' in report
+    assert 'Solr indexes (legacy): 10.00 GB (10240.00 MB)' in report
     repo.stats_json.assert_not_called()
 
 
@@ -89,6 +90,6 @@ def test_generate_size_report_falls_back_to_restic_stats(monkeypatch):
     monkeypatch.setattr('alfresco_backup.v2.size_report.ResticRepository', lambda *args, **kwargs: repo)
 
     report = generate_size_report(config)
-    assert 'Full size: 1.00 GB (1024.00 MB)' in report
-    assert 'Incremental: n/a' in report
+    assert 'Processed: 1.00 GB (1024.00 MB)' in report
+    assert 'Backed up this run: n/a' in report
     repo.stats_json.assert_called_once_with('oldsnap')

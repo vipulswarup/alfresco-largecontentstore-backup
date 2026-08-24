@@ -238,17 +238,23 @@ class ResticRepository:
 
     def forget_prune(self, retention_days: int) -> Dict[str, Any]:
         keep = f"{retention_days}d"
-        return self._run(
-            [
+        policy_tag = f'policy:{self.policy.name}'
+        last = None
+        kinds = ('kind:complete-set', 'kind:solr-indexes')
+        for index, kind in enumerate(kinds):
+            args = [
                 'forget',
                 '--keep-within', keep,
-                '--tag', 'kind:complete-set',
-                '--tag', f'policy:{self.policy.name}',
+                '--tag', kind,
+                '--tag', policy_tag,
                 '--group-by', 'host',
-                '--prune',
-            ],
-            timeout=86400,
-        )
+            ]
+            if index == len(kinds) - 1:
+                args.append('--prune')
+            last = self._run(args, timeout=86400)
+            if not last['success']:
+                return last
+        return last
 
     def find_snapshot_by_tag(self, tag: str) -> List[Dict[str, Any]]:
         r = self.snapshots_json()

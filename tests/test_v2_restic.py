@@ -35,22 +35,31 @@ def test_forget_prune_uses_host_grouping(monkeypatch):
     config = MagicMock()
     config.get_profile.return_value = None
     repo = ResticRepository(policy, config, profile=None)
-    captured = {}
+    captured = {'calls': []}
 
     def fake_run(args, timeout=None):
-        captured['args'] = args
+        captured['calls'].append(args)
         return {'success': True, 'stdout': '', 'stderr': '', 'error': None, 'lock_contention': False}
 
     monkeypatch.setattr(repo, '_run', fake_run)
     repo.forget_prune(7)
 
-    assert captured['args'] == [
-        'forget',
-        '--keep-within', '7d',
-        '--tag', 'kind:complete-set',
-        '--tag', 'policy:bak1week',
-        '--group-by', 'host',
-        '--prune',
+    assert captured['calls'] == [
+        [
+            'forget',
+            '--keep-within', '7d',
+            '--tag', 'kind:complete-set',
+            '--tag', 'policy:bak1week',
+            '--group-by', 'host',
+        ],
+        [
+            'forget',
+            '--keep-within', '7d',
+            '--tag', 'kind:solr-indexes',
+            '--tag', 'policy:bak1week',
+            '--group-by', 'host',
+            '--prune',
+        ],
     ]
 
 

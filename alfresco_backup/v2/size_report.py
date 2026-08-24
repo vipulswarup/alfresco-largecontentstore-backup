@@ -10,6 +10,8 @@ from .restic import ResticRepository
 SIZE_TAG_PROCESSED = 'bytes-processed:'
 SIZE_TAG_ADDED = 'bytes-added:'
 SIZE_TAG_SOLR = 'solr-bytes:'
+KIND_COMPLETE = 'kind:complete-set'
+KIND_SOLR = 'kind:solr-indexes'
 
 
 def parse_size_tag(tags: List[str], prefix: str) -> Optional[int]:
@@ -27,8 +29,9 @@ def generate_size_report(config: AppConfig) -> str:
         "Backup size report",
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
-        "Full size is the source scanned for that snapshot (contentstore + dump + Solr).",
+        "Full size is the source scanned for that snapshot.",
         "Incremental is new data added to the repository in that run.",
+        "Contentstore and Solr indexes are listed separately when both were backed up.",
         "Older snapshots without recorded incremental size show n/a.",
         "",
     ]
@@ -57,7 +60,8 @@ def generate_size_report(config: AppConfig) -> str:
         snapshots = listed.get('snapshots') or []
         snapshots = [
             snap for snap in snapshots
-            if 'kind:complete-set' in (snap.get('tags') or [])
+            if KIND_COMPLETE in (snap.get('tags') or [])
+            or KIND_SOLR in (snap.get('tags') or [])
         ]
         if not snapshots:
             lines.append("  No snapshots found.")
@@ -85,10 +89,14 @@ def _snapshot_lines(repo: ResticRepository, snap: Dict[str, Any]) -> List[str]:
     ]
     if run_id:
         lines.append(f"  Run: {run_id}")
-    lines.append(f"  Full size: {_format_optional_size(processed)}")
-    lines.append(f"  Incremental: {_format_optional_size(added)}")
-    if solr_bytes is not None:
-        lines.append(f"  Solr indexes: {_format_optional_size(solr_bytes)}")
+    if KIND_SOLR in tags:
+        lines.append("  Component: Solr indexes")
+    else:
+        lines.append("  Component: Contentstore")
+    lines.append(f"  Processed: {_format_optional_size(processed)}")
+    lines.append(f"  Backed up this run: {_format_optional_size(added)}")
+    if solr_bytes is not None and KIND_SOLR not in tags:
+        lines.append(f"  Solr indexes (legacy): {_format_optional_size(solr_bytes)}")
     lines.append("")
     return lines
 
