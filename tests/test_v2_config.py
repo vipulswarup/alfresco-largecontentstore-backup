@@ -194,6 +194,38 @@ def test_app_config_separates_source_and_restore_dirs(tmp_path, monkeypatch):
     assert cfg.restore_alf_base_dir == restore
     assert cfg.contentstore_path == source / 'alf_data' / 'contentstore'
     assert cfg.restore_contentstore_path == restore / 'alf_data' / 'contentstore'
+    assert cfg.solr_index_paths == []
+
+
+def test_app_config_discovers_solr_index_paths(tmp_path, monkeypatch):
+    source = tmp_path / 'source'
+    (source / 'alf_data' / 'contentstore').mkdir(parents=True)
+    solr4 = source / 'alf_data' / 'solr4'
+    solr4.mkdir()
+    env = tmp_path / '.env'
+    policies = tmp_path / 'backup-policies.yml'
+    env.write_text(
+        f"PGHOST=localhost\nPGPORT=5432\nPGUSER=a\nPGPASSWORD=b\n"
+        f"EISENVAULT_SOURCE_DIR={source}\n"
+    )
+    policies.write_text(yaml.dump({
+        'config_version': 1,
+        'global': {'staging_dir': str(tmp_path / 'staging'), 'max_parallel_destinations': 2},
+        'credential_profiles': [],
+        'backup_policies': [{
+            'name': 'local',
+            'enabled': True,
+            'destination_type': 'filesystem',
+            'repository_path': str(tmp_path / 'repo'),
+            'encryption': {'enabled': False, 'password_env': None},
+            'backup_time': '02:00',
+            'retention_days': 7,
+            'priority': 10,
+        }],
+    }))
+    monkeypatch.chdir(tmp_path)
+    cfg = AppConfig(str(env), str(policies))
+    assert cfg.solr_index_paths == [solr4]
 
 
 def test_app_config_restore_mode_allows_deleted_source_dir(tmp_path, monkeypatch):

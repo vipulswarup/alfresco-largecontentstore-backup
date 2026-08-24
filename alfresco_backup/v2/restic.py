@@ -215,13 +215,13 @@ class ResticRepository:
             args.extend(['--tag', tag])
         r = self._run(args, timeout=None)
         if r['success'] and r['stdout']:
-            try:
-                summary = json.loads(r['stdout'].strip().split('\n')[-1])
+            summary = _parse_backup_summary(r['stdout'])
+            if summary:
                 r['summary'] = summary
                 r['snapshot_id'] = summary.get('snapshot_id') or summary.get('id')
-                r['bytes_processed'] = summary.get('total_bytes_processed', 0)
-            except (json.JSONDecodeError, IndexError):
-                pass
+                r['bytes_processed'] = int(summary.get('total_bytes_processed', 0) or 0)
+                r['bytes_added'] = int(summary.get('data_added', 0) or 0)
+                r['bytes_added_packed'] = int(summary.get('data_added_packed', 0) or 0)
         return r
 
     def restore(
@@ -263,6 +263,43 @@ class ResticRepository:
     def find_by_run_id(self, run_id: str) -> List[Dict[str, Any]]:
         return self.find_snapshot_by_tag(f"run:{run_id}")
 
+    def add_tags(self, snapshot_id: str, tags: List[str]) -> Dict[str, Any]:
+        args = ['tag']
+        for tag in tags:
+            args.extend(['--add', tag])
+        args.append(snapshot_id)
+        return self._run(args, timeout=600)
+
+    def stats_json(self, snapshot_id: str) -> Dict[str, Any]:
+        r = self._run(
+            ['stats', '--json', '--mode', 'restore-size', snapshot_id],
+            timeout=3600,
+        )
+        if not r['success']:
+            return r
+        try:
+            r['stats'] = json.loads(r['stdout'])
+        except json.JSONDecodeError as e:
+            r['success'] = False
+            r['error'] = f"Invalid stats JSON: {e}"
+        return r
+
     @staticmethod
     def is_lock_error(result: Dict[str, Any]) -> bool:
         return bool(result.get('lock_contention'))
+
+
+def _parse_backup_summary(stdout: str) -> Optional[Dict[str, Any]]:
+    for line in reversed(stdout.strip().splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get('message_type') == 'summary' or 'total_bytes_processed' in obj:
+            return obj
+    return None

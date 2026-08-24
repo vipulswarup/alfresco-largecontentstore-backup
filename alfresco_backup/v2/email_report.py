@@ -5,20 +5,51 @@ import smtplib
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from typing import List
 
 from .app_config import AppConfig
-from .models import RunResult
+from .models import DestinationResult, RunResult
 
 logger = logging.getLogger(__name__)
 
+_GB = 1024 * 1024 * 1024
+_MB = 1024 * 1024
+_KB = 1024
+
 
 def _format_size(size_bytes: int) -> str:
-    """Render sizes in the most useful unit while preferring megabytes."""
-    if size_bytes >= 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} MB"
-    if size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+    """Render sizes as GB and MB when large, otherwise the most useful smaller unit."""
+    if size_bytes >= _GB:
+        gb = size_bytes / _GB
+        mb = size_bytes / _MB
+        return f"{gb:.2f} GB ({mb:.2f} MB)"
+    if size_bytes >= _MB:
+        return f"{size_bytes / _MB:.2f} MB"
+    if size_bytes >= _KB:
+        return f"{size_bytes / _KB:.2f} KB"
     return f"{size_bytes} bytes"
+
+
+def _destination_lines(dest: DestinationResult) -> List[str]:
+    lines = [
+        f"\nPolicy: {dest.policy_name}",
+        f"  Success: {dest.success}",
+    ]
+    if dest.snapshot_id:
+        lines.append(f"  Snapshot: {dest.snapshot_id}")
+    if dest.duration_seconds:
+        lines.append(f"  Duration: {dest.duration_seconds:.1f}s")
+    if dest.bytes_processed:
+        lines.append(f"  Processed (source size): {_format_size(dest.bytes_processed)}")
+    if dest.success or dest.bytes_added:
+        lines.append(f"  Backed up this run: {_format_size(dest.bytes_added)}")
+    if dest.solr_bytes:
+        lines.append(f"  Solr indexes: {_format_size(dest.solr_bytes)}")
+    if dest.lock_contention:
+        lines.append("  Lock contention: yes")
+    if dest.error:
+        lines.append(f"  Error: {dest.error}")
+    return lines
 
 
 def send_run_report(config: AppConfig, run_result: RunResult) -> None:
@@ -49,19 +80,8 @@ def send_run_report(config: AppConfig, run_result: RunResult) -> None:
         "DESTINATIONS",
         "=" * 60,
     ]
-    for d in run_result.destinations:
-        lines.append(f"\nPolicy: {d.policy_name}")
-        lines.append(f"  Success: {d.success}")
-        if d.snapshot_id:
-            lines.append(f"  Snapshot: {d.snapshot_id}")
-        if d.duration_seconds:
-            lines.append(f"  Duration: {d.duration_seconds:.1f}s")
-        if d.bytes_processed:
-            lines.append(f"  Processed: {_format_size(d.bytes_processed)}")
-        if d.lock_contention:
-            lines.append("  Lock contention: yes")
-        if d.error:
-            lines.append(f"  Error: {d.error}")
+    for dest in run_result.destinations:
+        lines.extend(_destination_lines(dest))
 
     if run_result.maintenance:
         lines.extend(["", "=" * 60, "MAINTENANCE", "=" * 60])

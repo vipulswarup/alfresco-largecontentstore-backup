@@ -334,6 +334,17 @@ class AppConfig:
         return self.restore_alf_base_dir / 'alf_data' / 'contentstore'
 
     @property
+    def solr_index_paths(self) -> List[Path]:
+        """Solr index trees under alf_data, if present (solr4, solr6, or solr)."""
+        alf_data = self.source_alf_base_dir / 'alf_data'
+        found = []
+        for name in ('solr4', 'solr6', 'solr'):
+            path = alf_data / name
+            if path.exists():
+                found.append(path)
+        return found
+
+    @property
     def customer_name(self) -> str:
         return os.getenv('CUSTOMER_NAME', '').strip()
 

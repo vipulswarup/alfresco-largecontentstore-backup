@@ -47,6 +47,12 @@ you run, for example `sudo apt install python3-venv` on supported Ubuntu release
 venv/bin/python backup.py
 ```
 
+**Backup size report (on demand):**
+```bash
+venv/bin/python backup.py --size-report
+```
+Prints full (source scanned) size and incremental (new data added this run) size for each snapshot, plus Solr index size when recorded.
+
 **Automated (via cron):**
 Setup wizard configures daily backups at 2 AM. Check cron with `crontab -l`.
 
