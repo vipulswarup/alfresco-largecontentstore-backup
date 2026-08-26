@@ -81,10 +81,11 @@ def _policy_summary_lines(
     for snap in snapshots:
         tags = snap.get('tags') or []
         snap_id = snap.get('id') or snap.get('short_id') or ''
-        processed, added, solr_bytes = _snapshot_sizes(repo, tags, snap_id)
+        processed, added, solr_bytes = _snapshot_sizes(repo, snap)
         if processed is None and solr_bytes is not None and KIND_SOLR not in tags:
             processed = solr_bytes
         records.append({
+            'id': snap_id,
             'when': _parse_snap_datetime(snap),
             'kind': 'solr' if KIND_SOLR in tags else 'contentstore',
             'processed': processed,
@@ -100,6 +101,8 @@ def _policy_summary_lines(
         [r for r in records if r['kind'] == 'solr'],
         key=lambda r: r['when'],
     )
+    _fill_missing_added(repo, contentstore)
+    _fill_missing_added(repo, solr)
 
     full_date = None
     if contentstore:
@@ -216,16 +219,42 @@ def _sum_optional(left: Optional[int], right: Optional[int]) -> Optional[int]:
     return left + right
 
 
+def _fill_missing_added(repo: ResticRepository, items: List[Dict[str, Any]]) -> None:
+    for index in range(1, len(items)):
+        if items[index]['added'] is not None:
+            continue
+        prev_id = items[index - 1].get('id')
+        curr_id = items[index].get('id')
+        if not prev_id or not curr_id:
+            continue
+        items[index]['added'] = repo.diff_added_bytes(prev_id, curr_id)
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _snapshot_sizes(
     repo: ResticRepository,
-    tags: List[str],
-    snapshot_id: str,
+    snap: Dict[str, Any],
 ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    tags = snap.get('tags') or []
+    snap_id = snap.get('id') or snap.get('short_id') or ''
+    summary = snap.get('summary') if isinstance(snap.get('summary'), dict) else {}
     processed = parse_size_tag(tags, SIZE_TAG_PROCESSED)
     added = parse_size_tag(tags, SIZE_TAG_ADDED)
     solr_bytes = parse_size_tag(tags, SIZE_TAG_SOLR)
-    if processed is None and snapshot_id:
-        stats = repo.stats_json(snapshot_id)
+    if processed is None:
+        processed = _int_or_none(summary.get('total_bytes_processed'))
+    if added is None:
+        added = _int_or_none(summary.get('data_added'))
+    if processed is None and snap_id:
+        stats = repo.stats_json(snap_id)
         if stats.get('success'):
             processed = int((stats.get('stats') or {}).get('total_size', 0) or 0)
     return processed, added, solr_bytes

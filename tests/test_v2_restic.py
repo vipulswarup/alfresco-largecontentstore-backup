@@ -168,3 +168,27 @@ def test_backup_parses_bytes_added_from_summary(monkeypatch, tmp_path):
     assert result['snapshot_id'] == 's1'
     assert result['bytes_processed'] == 100
     assert result['bytes_added'] == 20
+
+
+def test_diff_added_bytes_reads_statistics_line(monkeypatch):
+    config = MagicMock()
+    config.global_config.restic_read_concurrency = 4
+    repo = ResticRepository(_policy(), config, profile=None)
+
+    def fake_run(args, timeout=None):
+        captured['args'] = args
+        return {
+            'success': True,
+            'stdout': (
+                '{"message_type":"statistics","added":{"files":1,"bytes":2097152},'
+                '"removed":{"files":0,"bytes":0}}\n'
+            ),
+            'stderr': '',
+            'error': None,
+            'lock_contention': False,
+        }
+
+    captured = {}
+    monkeypatch.setattr(repo, '_run', fake_run)
+    assert repo.diff_added_bytes('parent', 'child') == 2097152
+    assert captured['args'] == ['diff', '--json', '--quiet', 'parent', 'child']

@@ -279,6 +279,31 @@ class ResticRepository:
     def dump_text(self, snapshot_id: str, path: str) -> Dict[str, Any]:
         return self._run(['dump', snapshot_id, path], timeout=120)
 
+    def diff_added_bytes(self, parent_id: str, snapshot_id: str) -> Optional[int]:
+        r = self._run(
+            ['diff', '--json', '--quiet', parent_id, snapshot_id],
+            timeout=3600,
+        )
+        if not r['success']:
+            return None
+        for line in reversed((r.get('stdout') or '').splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            added = obj.get('added')
+            if isinstance(added, dict) and 'bytes' in added:
+                try:
+                    return int(added['bytes'])
+                except (TypeError, ValueError):
+                    return None
+        return None
+
     def stats_json(self, snapshot_id: str) -> Dict[str, Any]:
         r = self._run(
             ['stats', '--json', '--mode', 'restore-size', snapshot_id],

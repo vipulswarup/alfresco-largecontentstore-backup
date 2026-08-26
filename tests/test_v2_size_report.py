@@ -237,3 +237,89 @@ def test_generate_size_report_sorts_mixed_restic_timestamps(monkeypatch):
     assert 'Date: 2026-08-20 02:00:00' in report
     assert '2026-08-24' in report
     assert '2026-08-21' in report
+
+
+def test_generate_size_report_uses_snapshot_summary_for_incrementals(monkeypatch):
+    policy = MagicMock()
+    policy.name = 'local'
+    policy.destination_type = 'filesystem'
+    policy.credential_profile = None
+
+    config = MagicMock()
+    config.enabled_policies.return_value = [policy]
+    config.get_profile.return_value = None
+
+    repo = MagicMock()
+    repo.snapshots_json.return_value = {
+        'success': True,
+        'snapshots': [
+            {
+                'id': 'fullsnap',
+                'short_id': 'fullsnap',
+                'time': '2026-08-17T07:10:12Z',
+                'tags': ['kind:complete-set'],
+                'summary': {
+                    'total_bytes_processed': 15 * 1024 * 1024,
+                    'data_added': 15 * 1024 * 1024,
+                },
+            },
+            {
+                'id': 'incsnap',
+                'short_id': 'incsnap',
+                'time': '2026-08-25T02:00:00Z',
+                'tags': ['kind:complete-set'],
+                'summary': {
+                    'total_bytes_processed': 16 * 1024 * 1024,
+                    'data_added': 5 * 1024 * 1024,
+                },
+            },
+        ],
+    }
+    monkeypatch.setattr('alfresco_backup.v2.size_report.ResticRepository', lambda *args, **kwargs: repo)
+
+    report = generate_size_report(config)
+    assert 'Contentstore: 15.00 MB' in report
+    assert '2026-08-25' in report
+    assert 'Contentstore: 5.00 MB' in report
+    repo.stats_json.assert_not_called()
+    repo.diff_added_bytes.assert_not_called()
+
+
+def test_generate_size_report_uses_restic_diff_when_added_unknown(monkeypatch):
+    policy = MagicMock()
+    policy.name = 'local'
+    policy.destination_type = 'filesystem'
+    policy.credential_profile = None
+
+    config = MagicMock()
+    config.enabled_policies.return_value = [policy]
+    config.get_profile.return_value = None
+
+    repo = MagicMock()
+    repo.snapshots_json.return_value = {
+        'success': True,
+        'snapshots': [
+            {
+                'id': 'fullsnap',
+                'short_id': 'fullsnap',
+                'time': '2026-08-17T07:10:12Z',
+                'tags': ['kind:complete-set'],
+            },
+            {
+                'id': 'incsnap',
+                'short_id': 'incsnap',
+                'time': '2026-08-25T02:00:00Z',
+                'tags': ['kind:complete-set'],
+            },
+        ],
+    }
+    repo.stats_json.return_value = {
+        'success': True,
+        'stats': {'total_size': 15 * 1024 * 1024},
+    }
+    repo.diff_added_bytes.return_value = 2 * 1024 * 1024
+    monkeypatch.setattr('alfresco_backup.v2.size_report.ResticRepository', lambda *args, **kwargs: repo)
+
+    report = generate_size_report(config)
+    assert 'Contentstore: 2.00 MB' in report
+    repo.diff_added_bytes.assert_called_once_with('fullsnap', 'incsnap')
