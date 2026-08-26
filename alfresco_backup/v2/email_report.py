@@ -3,6 +3,7 @@
 import logging
 import smtplib
 from datetime import datetime
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List
@@ -115,6 +116,7 @@ def send_run_report(config: AppConfig, run_result: RunResult) -> None:
     msg['To'] = config.alert_email
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain'))
+    _attach_size_report_pdf(msg, config)
 
     try:
         with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
@@ -124,6 +126,21 @@ def send_run_report(config: AppConfig, run_result: RunResult) -> None:
         logger.info("V2 run report email sent")
     except Exception as e:
         logger.error(f"Failed to send v2 email: {e}")
+
+
+def _attach_size_report_pdf(msg: MIMEMultipart, config: AppConfig) -> None:
+    try:
+        from .size_report import generate_size_report
+        from .size_report_pdf import build_size_report_pdf
+        report = generate_size_report(config)
+        pdf_bytes = build_size_report_pdf(report)
+    except Exception as exc:
+        logger.warning("Could not attach backup size report PDF: %s", exc)
+        return
+    filename = f"backup-size-report-{datetime.now().strftime('%Y-%m-%d')}.pdf"
+    attachment = MIMEApplication(pdf_bytes, _subtype='pdf')
+    attachment.add_header('Content-Disposition', 'attachment', filename=filename)
+    msg.attach(attachment)
 
 
 def smtp_is_configured(config: AppConfig) -> bool:

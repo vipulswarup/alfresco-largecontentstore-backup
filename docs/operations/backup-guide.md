@@ -62,7 +62,7 @@ The report shows, per destination:
 - **Last full backup**: date of the first retained snapshot, with contentstore, database, and Solr sizes in GB and MB
 - **Incremental backups**: later backup dates with new data added that day, in GB and MB, including the database dump size for that run
 
-Setup will offer to email the report and collect recipient addresses one at a time. SMTP settings from Guided setup (`.env`) are required to send.
+The same report is attached as a PDF to the daily backup status email. Setup will also offer to email the report and collect recipient addresses one at a time. SMTP settings from Guided setup (`.env`) are required to send.
 
 CLI equivalent:
 
@@ -111,7 +111,7 @@ Email alerts are controlled by the `EMAIL_ALERT_MODE` setting in `.env`:
 - **`both`**: Send emails on both successful and failed backups
 - **`none`**: Disable all email alerts
 
-When enabled, emails include detailed information about each component's status, timestamps, size information, and log file path. SMTP credentials and recipients are configured via `.env`.
+When enabled, emails include detailed information about each component's status, timestamps, and size information for the current run. A PDF attachment (`backup-size-report-YYYY-MM-DD.pdf`) lists the last full backup and the date-wise incremental history. SMTP credentials and recipients are configured via `.env`.
 
 ## Performance Notes
 

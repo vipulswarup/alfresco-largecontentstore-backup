@@ -1,7 +1,14 @@
 """Tests for human-readable v2 backup email content."""
 
-from alfresco_backup.v2.email_report import _destination_lines, _format_size
-from alfresco_backup.v2.models import DestinationResult
+from unittest.mock import MagicMock
+
+from alfresco_backup.v2.email_report import (
+    _destination_lines,
+    _format_size,
+    send_run_report,
+)
+from alfresco_backup.v2.models import DestinationResult, RunResult
+from alfresco_backup.v2.size_report_pdf import build_size_report_pdf
 
 
 def test_format_size_shows_gigabytes_and_megabytes():
@@ -42,3 +49,93 @@ def test_destination_lines_include_processed_added_and_solr():
     assert '  Solr indexes' in lines
     assert '    Processed: 10.00 GB (10240.00 MB)' in lines
     assert '    Backed up this run: 100.00 MB' in lines
+
+
+def test_build_size_report_pdf_contains_report_text():
+    report = (
+        "Last full backup\n"
+        "  Date: 2026-08-17 07:10:12\n"
+        "  Contentstore: 914.21 GB (936146.23 MB)\n"
+        "Incremental backups\n"
+        "  2026-08-25\n"
+        "    Contentstore: 593.78 MB\n"
+    )
+    pdf = build_size_report_pdf(report)
+    assert pdf.startswith(b'%PDF-1.4')
+    assert b'Last full backup' in pdf
+    assert b'2026-08-25' in pdf
+    assert pdf.rstrip().endswith(b'%%EOF')
+
+
+def test_send_run_report_attaches_size_report_pdf_without_changing_body(monkeypatch):
+    sent = {}
+
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def starttls(self):
+            return None
+
+        def login(self, *args):
+            return None
+
+        def send_message(self, msg):
+            sent['msg'] = msg
+
+    config = MagicMock()
+    config.email_enabled = True
+    config.email_alert_mode = 'both'
+    config.customer_name = 'Acme'
+    config.alert_from = 'backups@example.com'
+    config.alert_email = 'ops@example.com'
+    config.smtp_host = 'smtp.example.com'
+    config.smtp_port = 587
+    config.smtp_user = 'user'
+    config.smtp_password = 'secret'
+
+    report = (
+        "Last full backup\n"
+        "  Date: 2026-08-17 07:10:12\n"
+        "Incremental backups\n"
+        "  2026-08-25\n"
+        "    Contentstore: 593.78 MB\n"
+    )
+    monkeypatch.setattr('alfresco_backup.v2.email_report.smtplib.SMTP', FakeSMTP)
+    monkeypatch.setattr(
+        'alfresco_backup.v2.size_report.generate_size_report',
+        lambda _config: report,
+    )
+
+    send_run_report(
+        config,
+        RunResult(
+            run_id='run1',
+            status='success',
+            started_at='2026-08-26T02:00:00',
+            finished_at='2026-08-26T03:00:00',
+            destinations=[
+                DestinationResult(policy_name='daily-backup', success=True, snapshot_id='abc'),
+            ],
+        ),
+    )
+
+    msg = sent['msg']
+    body = msg.get_payload()[0].get_payload()
+    assert 'DESTINATIONS' in body
+    assert 'Last full backup' not in body
+    attachment = msg.get_payload()[1]
+    assert attachment.get_content_type() == 'application/pdf'
+    filename = attachment.get_filename()
+    assert filename.startswith('backup-size-report-')
+    assert filename.endswith('.pdf')
+    pdf = attachment.get_payload(decode=True)
+    assert pdf.startswith(b'%PDF-1.4')
+    assert b'Last full backup' in pdf
+    assert b'2026-08-25' in pdf
