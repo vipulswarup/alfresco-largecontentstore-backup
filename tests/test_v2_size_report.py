@@ -180,3 +180,60 @@ def test_generate_size_report_reads_db_size_from_run_json(monkeypatch, tmp_path)
         'fullsnap',
         str(staging / '20260824-1458-aaaa' / 'local' / 'metadata' / 'run.json'),
     )
+
+
+def test_generate_size_report_sorts_mixed_restic_timestamps(monkeypatch):
+    policy = MagicMock()
+    policy.name = 'local'
+    policy.destination_type = 'filesystem'
+    policy.credential_profile = None
+
+    config = MagicMock()
+    config.enabled_policies.return_value = [policy]
+    config.get_profile.return_value = None
+
+    repo = MagicMock()
+    repo.snapshots_json.return_value = {
+        'success': True,
+        'snapshots': [
+            {
+                'id': 'fullsnap',
+                'short_id': 'fullsnap',
+                'time': '2026-08-20T02:00:00Z',
+                'tags': [
+                    'kind:complete-set',
+                    'bytes-processed:1048576',
+                    'bytes-added:1048576',
+                    'bytes-db:1',
+                ],
+            },
+            {
+                'id': 'incsnap',
+                'short_id': 'incsnap',
+                'time': '2026-08-24T14:58:03.382418538Z',
+                'tags': [
+                    'kind:complete-set',
+                    'bytes-processed:2097152',
+                    'bytes-added:1048576',
+                    'bytes-db:1',
+                ],
+            },
+            {
+                'id': 'naivesnap',
+                'short_id': 'naivesnap',
+                'time': '2026-08-21T03:00:00',
+                'tags': [
+                    'kind:complete-set',
+                    'bytes-processed:1572864',
+                    'bytes-added:524288',
+                    'bytes-db:1',
+                ],
+            },
+        ],
+    }
+    monkeypatch.setattr('alfresco_backup.v2.size_report.ResticRepository', lambda *args, **kwargs: repo)
+
+    report = generate_size_report(config)
+    assert 'Date: 2026-08-20 02:00:00' in report
+    assert '2026-08-24' in report
+    assert '2026-08-21' in report

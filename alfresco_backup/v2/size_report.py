@@ -1,8 +1,9 @@
 """On-demand full vs incremental backup size report."""
 
 import json
+import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .app_config import AppConfig
@@ -238,12 +239,26 @@ def _format_optional_size(size_bytes: Optional[int]) -> str:
 
 def _parse_snap_datetime(snap: Dict[str, Any]) -> datetime:
     raw = snap.get('time')
-    if isinstance(raw, str):
-        try:
-            return datetime.fromisoformat(raw.replace('Z', '+00:00'))
-        except ValueError:
-            pass
-    return datetime.now()
+    parsed = _parse_iso_datetime(raw) if isinstance(raw, str) else None
+    if parsed is None:
+        return datetime.now(timezone.utc)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _parse_iso_datetime(raw: str) -> Optional[datetime]:
+    text = raw.replace('Z', '+00:00').replace('z', '+00:00')
+    match = re.match(r'(.*T\d{2}:\d{2}:\d{2})(\.\d+)?(.*)$', text)
+    if match:
+        frac = match.group(2) or ''
+        if len(frac) > 7:
+            frac = frac[:7]
+        text = match.group(1) + frac + (match.group(3) or '')
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _format_datetime(value: datetime) -> str:
