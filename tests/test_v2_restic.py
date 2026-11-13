@@ -1,5 +1,7 @@
 """Tests for restic version compatibility."""
 
+import json
+import subprocess
 from unittest.mock import MagicMock
 
 from alfresco_backup.v2.models import BackupPolicy, EncryptionConfig, MaintenanceConfig
@@ -168,6 +170,56 @@ def test_backup_parses_bytes_added_from_summary(monkeypatch, tmp_path):
     assert result['snapshot_id'] == 's1'
     assert result['bytes_processed'] == 100
     assert result['bytes_added'] == 20
+
+
+def test_failed_backup_reports_errors_without_progress(monkeypatch, tmp_path):
+    config = MagicMock()
+    config.global_config.restic_read_concurrency = 4
+    repo = ResticRepository(_policy(), config, profile=None)
+    source = tmp_path / 'solr4' / 'segments_15yt'
+    output = '\n'.join(
+        [json.dumps({'message_type': 'status', 'total_files': i}) for i in range(1000)]
+        + [json.dumps({
+            'message_type': 'error',
+            'error': {'Op': 'lstat', 'Path': str(source), 'Err': 2},
+            'during': 'archival',
+        })]
+    )
+    monkeypatch.setattr(
+        'alfresco_backup.v2.restic.subprocess.run',
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 3, output, 'Warning: at least one source file could not be read\n'
+        ),
+    )
+
+    result = repo.backup([tmp_path / 'solr4'], ['kind:solr-indexes'])
+
+    assert result['success'] is False
+    assert 'segments_15yt' in result['error']
+    assert 'Err' in result['error']
+    assert 'at least one source file could not be read' in result['error']
+    assert '"message_type": "status"' not in result['error']
+    assert len(result['error']) < 1000
+
+
+def test_failed_backup_bounds_many_diagnostic_entries(monkeypatch, tmp_path):
+    config = MagicMock()
+    config.global_config.restic_read_concurrency = 4
+    repo = ResticRepository(_policy(), config, profile=None)
+    output = '\n'.join(
+        json.dumps({'message_type': 'error', 'error': f'failed file {i}'})
+        for i in range(1000)
+    )
+    monkeypatch.setattr(
+        'alfresco_backup.v2.restic.subprocess.run',
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 3, output, ''),
+    )
+
+    result = repo.backup([tmp_path], [])
+
+    assert 'failed file 0' in result['error']
+    assert 'omitted' in result['error']
+    assert len(result['error']) < 6000
 
 
 def test_diff_added_bytes_reads_statistics_line(monkeypatch):

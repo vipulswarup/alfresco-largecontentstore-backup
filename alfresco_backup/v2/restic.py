@@ -22,6 +22,42 @@ UNKNOWN_INSECURE_FLAG = re.compile(r'unknown flag: --insecure-no-password', re.I
 # --insecure-no-password exists from restic 0.17.0 (Ubuntu apt often ships older).
 INSECURE_NO_PASSWORD_MIN_VERSION = (0, 17, 0)
 DEFAULT_RESTIC_PATHS = ('/usr/local/bin/restic', '/usr/bin/restic')
+MAX_ERROR_LINES = 20
+MAX_ERROR_CHARS = 4000
+
+
+def _format_failure_output(stderr: str, stdout: str, returncode: int) -> str:
+    """Keep restic diagnostics in alerts, without JSON progress events."""
+    diagnostics = []
+    for line in (stderr + '\n' + stdout).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(event, dict):
+                if event.get('message_type') in ('status', 'verbose_status', 'summary'):
+                    continue
+                line = json.dumps(event, ensure_ascii=False, separators=(',', ':'))
+        diagnostics.append(line[:1000] + ('…' if len(line) > 1000 else ''))
+
+    if not diagnostics:
+        return f'restic exited {returncode}'
+
+    selected = []
+    length = 0
+    for line in diagnostics[:MAX_ERROR_LINES]:
+        if length + len(line) > MAX_ERROR_CHARS:
+            break
+        selected.append(line)
+        length += len(line) + 1
+    omitted = len(diagnostics) - len(selected)
+    if omitted:
+        selected.append(f'({omitted} more diagnostic lines omitted)')
+    return '\n'.join(selected)
 
 
 def restic_binary() -> str:
@@ -177,7 +213,9 @@ class ResticRepository:
                 result['success'] = True
             else:
                 combined = (proc.stderr or '') + (proc.stdout or '')
-                result['error'] = combined.strip() or f"restic exited {proc.returncode}"
+                result['error'] = _format_failure_output(
+                    proc.stderr or '', proc.stdout or '', proc.returncode
+                )
                 if LOCK_PATTERN.search(combined):
                     result['lock_contention'] = True
         except subprocess.TimeoutExpired:
