@@ -100,11 +100,15 @@ class AppConfig:
         read_concurrency = int(data.get('restic_read_concurrency', 4))
         if not 1 <= read_concurrency <= 32:
             raise ValueError('restic_read_concurrency must be between 1 and 32')
+        backup_solr_indexes = data.get('backup_solr_indexes', False)
+        if not isinstance(backup_solr_indexes, bool):
+            raise ValueError('backup_solr_indexes must be true or false')
         dm = data.get('default_maintenance', {})
         self.global_config = GlobalConfig(
             staging_dir=staging,
             max_parallel_destinations=max_parallel,
             restic_read_concurrency=read_concurrency,
+            backup_solr_indexes=backup_solr_indexes,
             default_maintenance=MaintenanceConfig(
                 enabled=bool(dm.get('enabled', True)),
                 day_of_week=str(dm.get('day_of_week', 'sunday')).lower(),

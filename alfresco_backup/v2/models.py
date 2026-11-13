@@ -64,6 +64,7 @@ class GlobalConfig:
     staging_dir: Path
     max_parallel_destinations: int
     restic_read_concurrency: int
+    backup_solr_indexes: bool
     default_maintenance: MaintenanceConfig
 
 
@@ -103,6 +104,7 @@ class DestinationResult:
     bytes_added: int = 0
     solr_bytes_processed: int = 0
     solr_bytes_added: int = 0
+    solr_skipped: bool = False
     error: Optional[str] = None
     lock_contention: bool = False
 

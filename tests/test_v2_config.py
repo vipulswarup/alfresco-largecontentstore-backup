@@ -226,6 +226,13 @@ def test_app_config_discovers_solr_index_paths(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cfg = AppConfig(str(env), str(policies))
     assert cfg.solr_index_paths == [solr4]
+    assert cfg.global_config.backup_solr_indexes is False
+
+    doc = yaml.safe_load(policies.read_text())
+    doc['global']['backup_solr_indexes'] = True
+    policies.write_text(yaml.safe_dump(doc))
+    cfg = AppConfig(str(env), str(policies))
+    assert cfg.global_config.backup_solr_indexes is True
 
 
 def test_app_config_restore_mode_allows_deleted_source_dir(tmp_path, monkeypatch):

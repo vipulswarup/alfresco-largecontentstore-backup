@@ -51,6 +51,11 @@ def test_destination_lines_include_processed_added_and_solr():
     assert '    Backed up this run: 100.00 MB' in lines
 
 
+def test_destination_lines_explain_skipped_solr_indexes():
+    dest = DestinationResult(policy_name='local', success=True, solr_skipped=True)
+    assert '  Solr indexes: skipped (rebuild on restore)' in _destination_lines(dest)
+
+
 def test_build_size_report_pdf_contains_report_text():
     report = (
         "Last full backup\n"

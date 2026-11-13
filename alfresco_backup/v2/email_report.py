@@ -46,7 +46,9 @@ def _destination_lines(dest: DestinationResult) -> List[str]:
             f"    Processed: {_format_size(dest.bytes_processed)}",
             f"    Backed up this run: {_format_size(dest.bytes_added)}",
         ])
-    if dest.solr_bytes_processed or dest.solr_bytes_added:
+    if dest.solr_skipped:
+        lines.append("  Solr indexes: skipped (rebuild on restore)")
+    elif dest.solr_bytes_processed or dest.solr_bytes_added:
         lines.extend([
             "  Solr indexes",
             f"    Processed: {_format_size(dest.solr_bytes_processed)}",

@@ -90,6 +90,12 @@ Configuration is stored in `.env` file. Key settings:
 - `EMAIL_ALERT_MODE` - `both`, `failure_only`, or `none`
 - `SMTP_*` - Email alert configuration
 - Object storage secrets and restic passwords referenced by `*_env` fields
+- `global.backup_solr_indexes` in `backup-policies.yml` - defaults to `false`. The
+  backup skips live Solr index directories and the restore procedure rebuilds
+  search indexes from the restored repository. Set this to `true` only if you
+  explicitly need the legacy live-index copy; changing Solr files can make that
+  backup incomplete. A Solr-generated cold index backup is needed for a
+  reliable, quickly restorable search index copy.
 
 See `env.example` for complete template.
 

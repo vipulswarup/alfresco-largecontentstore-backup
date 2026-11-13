@@ -82,7 +82,14 @@ class DestinationBackupTask:
             )
 
             solr_paths = self.config.solr_index_paths
-            if solr_paths:
+            backup_solr = self.config.global_config.backup_solr_indexes
+            if solr_paths and not backup_solr:
+                result.solr_skipped = True
+                logger.info(
+                    "Destination %s: skipping live Solr indexes; rebuild on restore",
+                    self.policy.name,
+                )
+            if solr_paths and backup_solr:
                 solr_tags = [
                     'app:alfresco-backup',
                     f'run:{self.ctx.run_id}',

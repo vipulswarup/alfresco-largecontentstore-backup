@@ -39,6 +39,7 @@ def _load_policies(path: Path) -> dict:
                 'staging_dir': '/var/tmp/alfresco-backup',
                 'max_parallel_destinations': 2,
                 'restic_read_concurrency': 4,
+                'backup_solr_indexes': False,
                 'default_maintenance': {
                     'enabled': True,
                     'day_of_week': 'sunday',

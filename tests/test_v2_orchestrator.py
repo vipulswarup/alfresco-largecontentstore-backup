@@ -116,6 +116,7 @@ def test_destination_backup_includes_solr_and_records_added_bytes(tmp_path, monk
     config = MagicMock()
     config.get_profile.return_value = None
     config.global_config.restic_read_concurrency = 4
+    config.global_config.backup_solr_indexes = True
     config.contentstore_path = contentstore
     config.solr_index_paths = [solr]
 
@@ -177,3 +178,57 @@ def test_destination_backup_includes_solr_and_records_added_bytes(tmp_path, monk
     assert solr not in captured['calls'][0][0]
     assert captured['calls'][1][0] == [solr]
     assert 'kind:solr-indexes' in captured['calls'][1][1]
+
+
+def test_destination_backup_skips_live_solr_by_default(tmp_path, monkeypatch):
+    from alfresco_backup.v2.destination_task import DestinationBackupTask
+    from alfresco_backup.v2.models import (
+        BackupPolicy, EncryptionConfig, MaintenanceConfig, RunContext,
+    )
+
+    contentstore = tmp_path / 'contentstore'
+    contentstore.mkdir()
+    solr = tmp_path / 'solr4'
+    solr.mkdir()
+    pg_path = tmp_path / 'postgres.sql.gz'
+    pg_path.write_bytes(b'dump')
+    staging = tmp_path / 'staging'
+    staging.mkdir()
+    policy = BackupPolicy(
+        name='local', enabled=True, destination_type='filesystem',
+        repository_path=str(tmp_path / 'repo'), credential_profile=None,
+        repository_prefix=None, encryption=EncryptionConfig(False, None),
+        backup_time='02:00', retention_days=7,
+        maintenance=MaintenanceConfig(False, 'sunday', '03:30'), priority=10,
+    )
+    config = MagicMock()
+    config.get_profile.return_value = None
+    config.global_config.restic_read_concurrency = 4
+    config.global_config.backup_solr_indexes = False
+    config.contentstore_path = contentstore
+    config.solr_index_paths = [solr]
+    ctx = RunContext('run1', datetime.now(), 'host', staging, contentstore_path=contentstore)
+    task = DestinationBackupTask(config, policy, ctx)
+    calls = []
+
+    def fake_backup(paths, tags):
+        calls.append((paths, tags))
+        return {
+            'success': True, 'snapshot_id': 'snap1',
+            'bytes_processed': 1000, 'bytes_added': 200,
+        }
+
+    monkeypatch.setattr(task.repo, 'init', lambda: {'success': True})
+    monkeypatch.setattr(task.repo, 'backup', fake_backup)
+    monkeypatch.setattr(task.repo, 'add_tags', lambda *_args: {'success': True})
+    monkeypatch.setattr(
+        'alfresco_backup.v2.destination_task.write_run_metadata',
+        lambda *_args: staging / 'metadata' / 'run.json',
+    )
+
+    result = task.run(PgDumpInfo(pg_path, 'abc', 4, '', ''))
+
+    assert result.success is True
+    assert result.solr_skipped is True
+    assert len(calls) == 1
+    assert solr not in calls[0][0]
